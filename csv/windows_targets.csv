@@ -1,0 +1,5 @@
+# windows_targets.csv
+10.100.1.82 ,tcswk02 ,Administrator ,lucid-wins
+172.20.10.117,pwn1   ,Administrator ,lucid-wins
+172.20.10.114,tcsdc1 ,Administrator ,lucid-wins
+10.100.1.12 ,tcswk   ,Administrator ,lucid-wins
