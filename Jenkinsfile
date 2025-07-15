@@ -1,119 +1,120 @@
-/*  Jenkinsfile – Wazuh agent (re)deployment  */
+/*  Jenkinsfile — Wazuh agent roll-out
+    Requires:
+      • AnsiColor plugin
+      • Credentials IDs:
+          - ‘jenkins_ssh’  ➜ SSH private-key for Linux targets
+          - ‘jenkins_win’ ➜ user / password for WinRM targets
+      • Two static agents:
+          - linux-agent-01 (also controller of pipeline)
+          - windows-agent-01
+      • Repo layout:
+          csv/linux_targets.csv, csv/windows_targets.csv
+          scripts/enroll_linux_agent.sh, scripts/enroll_windows_agent.ps1
+*/
 
 pipeline {
-    /* Let each stage pick its own node */
-    agent none
+    agent { label 'linux-agent-01' }      /* orchestrator node */
+
+    /* keep only PIPELINE options here */
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
 
     environment {
         MANAGER_FQDN = 'enroll.cyberhongo.com'
         PORT         = '5443'
-
-        /* Jenkins credential IDs you created earlier */
-        SSH_KEY_ID   = 'jenkins_ssh'     // private key for Linux targets
-        WIN_CRED_ID  = 'jenkins_win'     // WinRM user / password
-    }
-
-    options {
-        timestamps()
-        ansiColor('xterm')
+        SSH_KEY_ID   = 'jenkins_ssh'
+        WIN_CRED_ID  = 'jenkins_win'
     }
 
     stages {
 
-        /* ---------- common code checkout (on the linux worker) ---------- */
+        /* ──────────────────────────────────────────── */
         stage('Checkout repo') {
-            agent { label 'linux-agent-01' }
             steps {
-                checkout scm                  // brings in scripts + CSVs
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    checkout scm
+                }
             }
         }
 
-        /* ---------- Linux fleet ---------- */
+        /* ──────────────────────────────────────────── */
         stage('Linux wave') {
-            agent { label 'linux-agent-01' }
-
             steps {
-                withCredentials([sshUserPrivateKey(credentialsId: env.SSH_KEY_ID,
-                                                  keyFileVariable: 'SSH_KEY',
-                                                  usernameVariable: 'SSH_USER')]) {
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    withCredentials([sshUserPrivateKey(credentialsId: env.SSH_KEY_ID,
+                                                       keyFileVariable: 'SSH_KEY',
+                                                       usernameVariable: 'SSH_USER')]) {
+                        sh '''
+                            echo ":: Rolling out to Linux fleet ::"
+                            while IFS=',' read -r IP HOST USER GROUP EXTRA; do
+                                [[ "$IP" =~ ^#|^$ ]] && continue   # skip comments / blanks
+                                echo "➜  $HOST ($IP) …"
 
-                    sh '''
-                      set -euo pipefail
-                      while IFS=, read -r IP HOST USER GROUP; do
-                          [[ -z "$IP" || "$IP" =~ ^# ]] && continue
-                          echo "### Linux target: $HOST ($IP) ###"
+                                # Copy & execute installer
+                                scp -o StrictHostKeyChecking=no -i "$SSH_KEY" \
+                                    scripts/enroll_linux_agent.sh ${USER:-$SSH_USER}@$IP:/tmp/
 
-                          # Copy script
-                          scp -o StrictHostKeyChecking=no -i "$SSH_KEY" \
-                              enroll_linux_agent.sh ${USER:-$SSH_USER}@"$IP":/tmp/
-
-                          # Execute remotely: remove if present, then run script
-                          ssh -tt -o StrictHostKeyChecking=no -i "$SSH_KEY" \
-                              ${USER:-$SSH_USER}@"$IP" <<'EOF'
-                                sudo systemctl stop wazuh-agent 2>/dev/null || true
-                                sudo apt-get -y purge wazuh-agent 2>/dev/null || true
-                                bash /tmp/enroll_linux_agent.sh -g '"$GROUP"' \
-                                      -m '"$MANAGER_FQDN"' -p '"$PORT"'
-                                sudo systemctl enable wazuh-agent
-                                sudo systemctl start  wazuh-agent
-                              EOF
-                      done < linux_targets.csv
-                    '''
+                                ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" \
+                                    ${USER:-$SSH_USER}@$IP \
+                                    "sudo bash /tmp/enroll_linux_agent.sh \
+                                         -m $MANAGER_FQDN -p $PORT -g $GROUP"
+                            done < csv/linux_targets.csv
+                        '''
+                    }
                 }
             }
         }
 
-        /* ---------- Windows fleet ---------- */
+        /* ──────────────────────────────────────────── */
         stage('Windows wave') {
-            /* This stage actually *runs* on the Windows Jenkins agent */
-            agent { label 'windows-agent-01' }
+            agent { label 'windows-agent-01' }     /* switch node */
 
             steps {
-                withCredentials([usernamePassword(credentialsId: env.WIN_CRED_ID,
-                                                  usernameVariable: 'WIN_USER',
-                                                  passwordVariable: 'WIN_PASS')]) {
+                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                    withCredentials([usernamePassword(credentialsId: env.WIN_CRED_ID,
+                                                      usernameVariable: 'WIN_USER',
+                                                      passwordVariable: 'WIN_PASS')]) {
+                        powershell '''
+                            Write-Host ":: Rolling out to Windows fleet ::"
+                            Import-Module PSDesiredStateConfiguration      # ensure CIM/WinRM support
 
-                    powershell '''
-                      Import-Module PSReadLine                # just for colour
+                            # Read CSV
+                            (Get-Content csv\\windows_targets.csv) | ForEach-Object {
+                                if ($_ -match '^(#|$)') { return }          # skip comments / blank
+                                $parts  = ($_ -split ',')
+                                $ip     = $parts[0]; $host=$parts[1]; $user=$parts[2]; $group=$parts[3]
 
-                      $SecurePass = ConvertTo-SecureString $Env:WIN_PASS -AsPlainText -Force
-                      $Cred       = New-Object System.Management.Automation.PSCredential ($Env:WIN_USER,$SecurePass)
+                                Write-Host "➜  $host ($ip) …"
 
-                      Get-Content -Path windows_targets.csv | ForEach-Object {
-                          $line = ($_ -split ',')
-                          if ($line[0] -and -not ($line[0] -match '^#')) {
+                                $sess = New-PSSession -ComputerName $ip `
+                                                       -Credential (New-Object PSCredential($user,(ConvertTo-SecureString $env:WIN_PASS -AsPlainText -Force))) `
+                                                       -Authentication Negotiate
 
-                              $IP,$Host,$User,$Group = $line
-                              Write-Host "### Windows target: $Host ($IP) ###"
+                                Copy-Item scripts\\enroll_windows_agent.ps1 -ToSession $sess -Destination "C:\\Temp\\enroll_windows_agent.ps1" -Force
 
-                              # Copy script
-                              Copy-Item -Path enroll_windows_agent.ps1 -Destination "\\$IP\\C$\\Temp" -Force
+                                Invoke-Command -Session $sess -ScriptBlock {
+                                    param($mgr,$port,$grp)
+                                    C:\\Temp\\enroll_windows_agent.ps1 `
+                                        -ManagerFqdn $mgr -Port $port -Group $grp
+                                } -ArgumentList $env:MANAGER_FQDN,$env:PORT,$group
 
-                              # Invoke remote: stop/purge if exists, then enrol
-                              Invoke-Command -ComputerName $IP -Credential $Cred -ScriptBlock {
-                                  param($Group,$Mgr,$Port)
-
-                                  # Uninstall existing agent if present
-                                  if (Get-Service -Name WazuhSvc -ErrorAction SilentlyContinue) {
-                                      Stop-Service WazuhSvc -Force
-                                      $msi = Get-WmiObject Win32_Product | Where-Object { $_.Name -like 'Wazuh Agent*' }
-                                      if ($msi) { $msi.Uninstall() | Out-Null }
-                                  }
-
-                                  # Run fresh enrolment
-                                  C:\\Temp\\enroll_windows_agent.ps1 `
-                                        -Group $Group -ManagerFQDN $Mgr -Port $Port
-                              } -ArgumentList $Group,$Env:MANAGER_FQDN,$Env:PORT
-                          }
-                      }
-                    '''
+                                Remove-PSSession $sess
+                            }
+                        '''
+                    }
                 }
             }
         }
-    }  /* stages */
+    }
 
-    /* optional reporting / cleanup */
+    /* ──────────────────────────────────────────── */
     post {
-        always { echo 'Wazuh deployment pipeline finished.' }
+        always {
+            wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
+                echo 'Pipeline finished (success, unstable, or failure).'
+            }
+        }
     }
 }
