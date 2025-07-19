@@ -1,6 +1,5 @@
 # linux_targets.csv
 #IP,HOST,USER,GROUP
-10.100.1.69,wk-horse,robot,lucid-linux
 10.100.1.148,gvm,robot,lucid-linux
 172.20.10.111,n8n,robot,lucid-linux
 172.20.10.112,plx1,robot,lucid-linux
