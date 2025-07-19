@@ -1,36 +1,33 @@
-/*  Jenkinsfile — Wazuh agent roll-out
-    Requires:
-      • AnsiColor plugin
-      • Credentials IDs:
-          - ‘jenkins_ssh’  ➜ SSH private-key for Linux targets
-          - ‘jenkins_win’ ➜ user / password for WinRM targets
-      • Two static agents:
-          - linux-agent-01 (also controller of pipeline)
-          - windows-agent-01
-      • Repo layout:
-          csv/linux_targets.csv, csv/windows_targets.csv
-          scripts/enroll_linux_agent.sh, scripts/enroll_windows_agent.ps1
-*/
+/*
+ *  Jenkinsfile – LucidSecOps Wazuh agent rollout
+ *  - Works with one Linux controller/worker (label: linux-agent-01)
+ *    and one Windows worker  (label: windows-agent-01)
+ *  - Reads clean CSVs from repo/csv/
+ *  - Uses ssh key + WinRM creds stored in Jenkins credentials store
+ */
 
 pipeline {
-    agent { label 'linux-agent-01' }      /* orchestrator node */
+    /* master/“controller” runs nothing → pick dedicated Linux node */
+    agent { label 'linux-agent-01' }
 
-    /* keep only PIPELINE options here */
     options {
         timestamps()
-        disableConcurrentBuilds()
     }
 
     environment {
+        /* Wazuh enrollment */
         MANAGER_FQDN = 'enroll.cyberhongo.com'
-        PORT         = '1514'
-        SSH_KEY_ID   = 'jenkins_ssh'
-        WIN_CRED_ID  = 'jenkins_win'
+        PORT_DATA    = '1514'   // manager-to-agent data
+        PORT_AUTH    = '1515'   // agent-auth enrollment
+
+        /* Jenkins credential IDs */
+        SSH_KEY_ID  = 'jenkins_ssh'   // SSH User + private-key cred
+        WIN_CRED_ID = 'jenkins_win'   // Username & password cred
     }
 
     stages {
 
-        /* ──────────────────────────────────────────── */
+        /* ──────────────────────────── */
         stage('Checkout repo') {
             steps {
                 wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
@@ -39,81 +36,97 @@ pipeline {
             }
         }
 
-        /* ──────────────────────────────────────────── */
+        /* ──────────────────────────── */
         stage('Linux wave') {
             steps {
-                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
-                    withCredentials([sshUserPrivateKey(credentialsId: env.SSH_KEY_ID,
-                                                       keyFileVariable: 'SSH_KEY',
-                                                       usernameVariable: 'SSH_USER')]) {
-                        sh '''
-                            echo ":: Rolling out to Linux fleet ::"
-                            while IFS=',' read -r IP HOST USER GROUP EXTRA; do
-                                [[ "$IP" =~ ^#|^$ ]] && continue   # skip comments / blanks
-                                echo "➜  $HOST ($IP) …"
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: env.SSH_KEY_ID,
+                                      keyFileVariable: 'SSH_KEY',
+                                      usernameVariable: 'SSH_USER')
+                ]) {
 
-                                # Copy & execute installer
-                                scp -o StrictHostKeyChecking=no -i "$SSH_KEY" \
-                                    scripts/enroll_linux_agent.sh ${USER:-$SSH_USER}@$IP:/tmp/
+                    /*
+                     *  Run the loop explicitly with /bin/bash
+                     *  – skips blank / comment lines
+                     */
+                    sh(script: '''
+#!/usr/bin/env bash
+set -euo pipefail
 
-                                ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" \
-                                    ${USER:-$SSH_USER}@$IP \
-                                    "sudo bash /tmp/enroll_linux_agent.sh \
-                                         -m $MANAGER_FQDN -p $PORT -g $GROUP"
-                            done < csv/linux_targets.csv
-                        '''
-                    }
+echo -e "\\n\\e[34m:: Rolling out to Linux fleet ::\\e[0m"
+
+while IFS=',' read -r IP HOST USER GROUP _; do
+  # Skip empty rows or rows whose first non-blank char is '#'
+  [[ -z "${IP// }" || "${IP}" == \#* ]] && continue
+
+  USER=${USER:-robot}
+
+  echo -e "\\e[36m➜  ${HOST:-$IP} ($IP) as $USER\\e[0m"
+  scp -o StrictHostKeyChecking=no -i "$SSH_KEY" \
+      scripts/enroll_linux_agent.sh "${USER}@${IP}:/tmp/"
+
+  ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" \
+      "${USER}@${IP}" \
+      "bash /tmp/enroll_linux_agent.sh -g ${GROUP}"
+done < csv/linux_targets.csv
+''', shell: '/bin/bash')
                 }
             }
         }
 
-        /* ──────────────────────────────────────────── */
+        /* ──────────────────────────── */
         stage('Windows wave') {
-            agent { label 'windows-agent-01' }     /* switch node */
+            /* run only on Windows agent */
+            agent { label 'windows-agent-01' }
 
             steps {
-                wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
-                    withCredentials([usernamePassword(credentialsId: env.WIN_CRED_ID,
-                                                      usernameVariable: 'WIN_USER',
-                                                      passwordVariable: 'WIN_PASS')]) {
-                        powershell '''
-                            Write-Host ":: Rolling out to Windows fleet ::"
-                            Import-Module PSDesiredStateConfiguration      # ensure CIM/WinRM support
+                withCredentials([
+                    usernamePassword(credentialsId: env.WIN_CRED_ID,
+                                     usernameVariable: 'WIN_USER',
+                                     passwordVariable: 'WIN_PASS')
+                ]) {
+                    powershell '''
+#--- Helper: session opts that skip CN / CA checks ----#
+$opts = New-PSSessionOption -SkipCACheck -SkipCNCheck `
+                            -OperationTimeout 600000
 
-                            # Read CSV
-                            (Get-Content csv\\windows_targets.csv) | ForEach-Object {
-                                if ($_ -match '^(#|$)') { return }          # skip comments / blank
-                                $parts  = ($_ -split ',')
-                                $ip     = $parts[0]; $host=$parts[1]; $user=$parts[2]; $group=$parts[3]
+Write-Host "`n:: Rolling out to Windows fleet ::`n" -ForegroundColor Cyan
 
-                                Write-Host "➜  $host ($ip) …"
+Get-Content csv\\windows_targets.csv | ForEach-Object {
+    $_ = $_.Trim()
+    if (-not $_ -or $_ -match '^#') { return }
 
-                                $sess = New-PSSession -ComputerName $ip `
-                                                       -Credential (New-Object PSCredential($user,(ConvertTo-SecureString $env:WIN_PASS -AsPlainText -Force))) `
-                                                       -Authentication Negotiate
+    $parts = $_ -split ','
+    $ip,$host,$user,$group = $parts[0..3]
 
-                                Copy-Item scripts\\enroll_windows_agent.ps1 -ToSession $sess -Destination "C:\\Temp\\enroll_windows_agent.ps1" -Force
+    if (-not $user) { $user = $env:WIN_USER }  # fallback
 
-                                Invoke-Command -Session $sess -ScriptBlock {
-                                    param($mgr,$port,$grp)
-                                    C:\\Temp\\enroll_windows_agent.ps1 `
-                                        -ManagerFqdn $mgr -Port $port -Group $grp
-                                } -ArgumentList $env:MANAGER_FQDN,$env:PORT,$group
+    Write-Host "➜  $host ($ip) as $user"
+    Copy-Item scripts\\enroll_windows_agent.ps1 `
+              -Destination "\\\\$ip\\C$\\Temp\\" -Force
 
-                                Remove-PSSession $sess
-                            }
-                        '''
-                    }
+    $cred = New-Object System.Management.Automation.PSCredential `
+              ($user, (ConvertTo-SecureString $env:WIN_PASS -AsPlainText -Force))
+
+    Invoke-Command -ComputerName $ip -Port 5986 -UseSSL `
+                   -SessionOption $opts -Authentication Basic `
+                   -Credential $cred `
+                   -FilePath "\\\\$ip\\C$\\Temp\\enroll_windows_agent.ps1" `
+                   -ArgumentList "-Group $group",
+                                 "-ManagerFQDN $env:MANAGER_FQDN",
+                                 "-Port $env:PORT_AUTH"
+}
+'''
                 }
             }
         }
-    }
+    } /* stages */
 
-    /* ──────────────────────────────────────────── */
+    /* ──────────────────────────── */
     post {
         always {
             wrap([$class: 'AnsiColorBuildWrapper', colorMapName: 'xterm']) {
-                echo 'Pipeline finished (success, unstable, or failure).'
+                echo "Pipeline finished (success, unstable, or failure)."
             }
         }
     }
