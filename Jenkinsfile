@@ -23,7 +23,7 @@ pipeline {
 
     environment {
         MANAGER_FQDN = 'enroll.cyberhongo.com'
-        PORT         = '5443'
+        PORT         = '1514'
         SSH_KEY_ID   = 'jenkins_ssh'
         WIN_CRED_ID  = 'jenkins_win'
     }

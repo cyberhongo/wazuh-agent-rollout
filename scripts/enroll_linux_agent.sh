@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 MANAGER_FQDN="enroll.cyberhongo.com"
-MANAGER_PORT="5443"
+MANAGER_PORT="1514"
+AUTH_PORT="1515"
 
 usage() { echo "Usage: $0 -g <group>" ; exit 1 ; }
 while getopts "g:" o; do case "${o}" in g) GROUP="${OPTARG}";; *) usage;; esac; done
@@ -27,7 +28,7 @@ sudo DEBIAN_FRONTEND=noninteractive \
      dpkg -i /tmp/wazuh-agent.deb
 
 echo "[*] Registering via agent-auth…"
-sudo /var/ossec/bin/agent-auth -m "$MANAGER_FQDN" -p "$MANAGER_PORT" -g "$GROUP"
+sudo /var/ossec/bin/agent-auth -m "$MANAGER_FQDN" -p "$AUTH_PORT" -g "$GROUP"
 
 echo "[*] Starting & enabling service…"
 sudo systemctl enable --now wazuh-agent
