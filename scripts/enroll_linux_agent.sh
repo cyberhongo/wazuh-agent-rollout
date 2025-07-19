@@ -21,11 +21,14 @@ fi
 
 echo "[*] Installing fresh agent 4.12.0…"
 wget -q https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.12.0-1_amd64.deb -O /tmp/wazuh-agent.deb
-sudo DEBIAN_FRONTEND=noninteractive \
-     WAZUH_MANAGER="$MANAGER_FQDN" \
-     WAZUH_MANAGER_PORT="$MANAGER_PORT" \
-     WAZUH_AGENT_GROUP="$GROUP" \
-     dpkg -i /tmp/wazuh-agent.deb
+
+sudo bash -c "
+  export DEBIAN_FRONTEND=noninteractive
+  export WAZUH_MANAGER='$MANAGER_FQDN'
+  export WAZUH_MANAGER_PORT='$MANAGER_PORT'
+  export WAZUH_AGENT_GROUP='$GROUP'
+  dpkg -i /tmp/wazuh-agent.deb
+"
 
 echo "[*] Registering via agent-auth…"
 sudo /var/ossec/bin/agent-auth -m "$MANAGER_FQDN" -p "$AUTH_PORT" -g "$GROUP"
