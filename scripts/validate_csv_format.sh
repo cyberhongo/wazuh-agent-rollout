@@ -1,29 +1,26 @@
 #!/bin/bash
-set -euo pipefail
 
-EXPECTED_HEADER="HOSTNAME,IP,USER,GROUP"
-FILE="$1"
+CSV_FILE="$1"
 
-echo "[*] Validating format of $FILE..."
-
-if ! [[ -f "$FILE" ]]; then
-  echo "❌ ERROR: File not found: $FILE"
+if [[ ! -f "$CSV_FILE" ]]; then
+  echo "❌ CSV file not found: $CSV_FILE"
   exit 1
 fi
 
-HEADER=$(head -n1 "$FILE" | tr -d '\r')
-if [[ "$HEADER" != "$EXPECTED_HEADER" ]]; then
-  echo "❌ ERROR: Expected header: $EXPECTED_HEADER"
-  echo "📌 Found header:    $HEADER"
+echo "[*] Validating format of $CSV_FILE..."
+
+header=$(head -n1 "$CSV_FILE")
+expected="ip,hostname,username,group"
+
+if [[ "$header" != "$expected" ]]; then
+  echo "❌ Invalid header in $CSV_FILE. Expected: $expected"
   exit 1
 fi
 
-tail -n +2 "$FILE" | while IFS=',' read -r HOSTNAME IP USER GROUP; do
-  [[ "$HOSTNAME" =~ ^#|^$ ]] && continue
-  if [[ -z "$IP" || -z "$GROUP" ]]; then
-    echo "⚠️  Invalid line: $HOSTNAME,$IP,$USER,$GROUP"
-    exit 1
-  fi
-done
+awk -F',' 'NF != 4 { print "❌ Invalid row: " $0; bad=1 } END { exit bad }' "$CSV_FILE"
+if [[ $? -ne 0 ]]; then
+  echo "❌ CSV validation failed: $CSV_FILE"
+  exit 1
+fi
 
-echo "✅ CSV format is valid: $FILE"
+echo "✅ CSV format is valid: $CSV_FILE"
