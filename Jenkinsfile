@@ -33,7 +33,7 @@ pipeline {
         stage('Linux wave') {
             steps {
                 script {
-                    def targets = readCSV(env.LINUX_CSV)
+                    def targets = readCSV file: env.LINUX_CSV
 
                     if (targets.size() == 0) {
                         error "❌ No Linux targets found in CSV. Check format and contents."
@@ -56,7 +56,7 @@ pipeline {
         stage('Windows wave') {
             steps {
                 script {
-                    def targets = readCSV(env.WINDOWS_CSV)
+                    def targets = readCSV file: env.WINDOWS_CSV
 
                     if (targets.size() == 0) {
                         error "❌ No Windows targets found in CSV. Check format and contents."
