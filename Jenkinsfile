@@ -4,7 +4,10 @@ pipeline {
     environment {
         LINUX_CSV = 'csv/linux_targets.csv'
         WINDOWS_CSV = 'csv/windows_targets.csv'
-        LOG_FILE = "rollout_log_$(new Date().format('yyyyMMdd_HHmmss')).txt"
+        SSH_USER = credentials('wazuh_ssh_user')
+        PRIVKEY = credentials('wazuh_ssh_privkey')
+        WIN_USER = credentials('wazuh_win_user')
+        WIN_PASS = credentials('wazuh_win_pass')
     }
 
     options {
@@ -20,10 +23,10 @@ pipeline {
 
         stage('Pre-check CSV Format') {
             steps {
-                echo '🔎 Validating Linux and Windows CSV formats...'
+                echo "🔎 Validating Linux and Windows CSV formats..."
                 sh 'chmod +x scripts/validate_csv_format.sh'
-                sh "scripts/validate_csv_format.sh ${env.LINUX_CSV}"
-                sh "scripts/validate_csv_format.sh ${env.WINDOWS_CSV}"
+                sh 'scripts/validate_csv_format.sh ${LINUX_CSV}'
+                sh 'scripts/validate_csv_format.sh ${WINDOWS_CSV}'
             }
         }
 
@@ -37,11 +40,14 @@ pipeline {
                     }
 
                     targets.each { row ->
-                        echo "📄 Parsed CSV row -> Hostname: ${row.hostname}, IP: ${row.ip}, User: ${row.username}, Group: ${row.group}"
-
-                        def cmd = """ssh -i "${PRIVKEY}" -o StrictHostKeyChecking=no ${row.username}@${row.ip} 'bash -s' < scripts/enroll_linux_agent.sh ${row.group}"""
                         echo "🚀 Deploying Wazuh agent to ${row.hostname} (${row.ip})..."
-                        sh(script: cmd)
+
+                        def deployCmd = """
+                        ssh -i '${PRIVKEY}' -o StrictHostKeyChecking=no ${SSH_USER}@${row.ip} \\
+                        'bash -s' < scripts/enroll_linux_agent.sh ${row.group} ${row.hostname}
+                        """
+
+                        sh deployCmd
                     }
                 }
             }
@@ -49,41 +55,81 @@ pipeline {
 
         stage('Windows wave') {
             steps {
-                echo '🔧 Windows rollout to be implemented with WinRM / Ansible later...'
-                // Placeholder for PowerShell WinRM automation
+                script {
+                    def targets = readCSV(env.WINDOWS_CSV)
+
+                    if (targets.size() == 0) {
+                        error "❌ No Windows targets found in CSV. Check format and contents."
+                    }
+
+                    targets.each { row ->
+                        echo "💻 Deploying to Windows Host: ${row.hostname} (${row.ip})"
+
+                        def winrmCmd = """
+                        powershell -Command \"
+                        \$secpasswd = ConvertTo-SecureString '${WIN_PASS}' -AsPlainText -Force;
+                        \$cred = New-Object System.Management.Automation.PSCredential ('${row.username}', \$secpasswd);
+                        Invoke-Command -ComputerName ${row.ip} -Credential \$cred -ScriptBlock {
+                            Invoke-WebRequest -Uri 'http://fileserver/install_wazuh_agent.ps1' -OutFile 'C:\\\\install_wazuh_agent.ps1';
+                            & 'C:\\\\install_wazuh_agent.ps1';
+                        }
+                        \"
+                        """
+
+                        bat(script: winrmCmd)
+                    }
+                }
             }
         }
 
         stage('Git commit & push rollout log') {
             steps {
                 script {
-                    sh "git add rollout_logs/${LOG_FILE} || true"
-                    sh "git commit -m '📦 Rollout log update: ${LOG_FILE}' || true"
-                    sh "git push origin main || true"
+                    def logFile = "logs/rollout_log_${new Date().format('yyyyMMdd_HHmmss')}.txt"
+
+                    sh """
+                    mkdir -p logs
+                    echo 'Rollout completed at: ' \$(date) > ${logFile}
+                    git add ${logFile}
+                    git config user.name 'Jenkins'
+                    git config user.email 'jenkins@cyberhongo.com'
+                    git commit -m '📦 Add rollout log ${logFile}'
+                    git push origin main
+                    """
                 }
             }
         }
     }
 
     post {
+        success {
+            echo '✅ Pipeline completed successfully!'
+        }
         failure {
             echo '❌ Pipeline failed. Check logs for details.'
         }
     }
 }
 
+// Utility method
 def readCSV(path) {
-    def lines = readFile(path).trim().split('\n')
-    def headers = lines[0].split(',').collect { it.trim() }
-    def result = []
+    def rows = []
+    def csvFile = new File(path)
 
-    for (int i = 1; i < lines.size(); i++) {
-        def values = lines[i].split(',').collect { it.trim() }
-        def entry = [:]
-        for (int j = 0; j < headers.size(); j++) {
-            entry[headers[j]] = values[j]
-        }
-        result << entry
+    if (!csvFile.exists()) {
+        error "CSV file not found: ${path}"
     }
-    return result
+
+    def lines = csvFile.readLines()
+    def headers = lines[0].split(',')
+
+    lines.drop(1).each { line ->
+        def values = line.split(',')
+        def row = [:]
+        headers.eachWithIndex { header, idx ->
+            row[header.trim()] = values[idx].trim()
+        }
+        rows << row
+    }
+    return rows
 }
