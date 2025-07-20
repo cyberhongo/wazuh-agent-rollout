@@ -23,6 +23,18 @@ pipeline {
             }
         }
 
+    stage('Pre-check CSVs') {
+        steps {
+            sh '''
+             echo -e "\\n🔎 Pre-validating Linux and Windows CSV files..."
+             chmod +x scripts/validate_csv_format.sh
+             scripts/validate_csv_format.sh csv/linux_targets.csv
+             scripts/validate_csv_format.sh csv/windows_targets.csv
+            '''
+        }
+    }
+
+
         stage('Linux wave') {
             steps {
                 withCredentials([
@@ -36,6 +48,18 @@ pipeline {
                 }
             }
         }
+
+        stage('Pre-check CSVs') {
+            steps {
+                sh '''
+                 echo -e "\\n🔎 Pre-validating Linux and Windows CSV files..."
+                 chmod +x scripts/validate_csv_format.sh
+                 scripts/validate_csv_format.sh csv/linux_targets.csv
+                 scripts/validate_csv_format.sh csv/windows_targets.csv
+                '''
+           }
+      }
+
 
                 stage('Windows wave') {
             steps {
