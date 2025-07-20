@@ -2,10 +2,13 @@ pipeline {
     agent any
 
     environment {
-        SSH_USER = credentials('ssh_user')        // Injected via Jenkins Credentials
-        PRIVKEY   = credentials('ssh_privkey')    // SSH private key for Linux hosts
-        WIN_USER  = credentials('win_user')       // Windows admin username
-        WIN_PASS  = credentials('win_pass')       // Windows password
+        LINUX_CSV = 'csv/linux_targets.csv'
+        WINDOWS_CSV = 'csv/windows_targets.csv'
+        LOG_FILE = "rollout_log_$(new Date().format('yyyyMMdd_HHmmss')).txt"
+    }
+
+    options {
+        timestamps()
     }
 
     stages {
@@ -19,39 +22,26 @@ pipeline {
             steps {
                 echo '🔎 Validating Linux and Windows CSV formats...'
                 sh 'chmod +x scripts/validate_csv_format.sh'
-                sh 'scripts/validate_csv_format.sh csv/linux_targets.csv'
-                sh 'scripts/validate_csv_format.sh csv/windows_targets.csv'
+                sh "scripts/validate_csv_format.sh ${env.LINUX_CSV}"
+                sh "scripts/validate_csv_format.sh ${env.WINDOWS_CSV}"
             }
         }
 
         stage('Linux wave') {
             steps {
                 script {
-                    def linuxTargets = readCSV(file: 'csv/linux_targets.csv')
-                    for (row in linuxTargets) {
-                        def host = row.hostname
-                        def ip   = row.ip
-                        echo "🚀 Deploying Wazuh agent to ${host} (${ip})..."
+                    def targets = readCSV(env.LINUX_CSV)
 
-                        def result = sh(
-                            script: """
-                            ssh -i ${PRIVKEY} -o StrictHostKeyChecking=no ${SSH_USER}@${ip} <<'EOF'
-                            echo '[*] Starting Wazuh agent enrollment ::'
-                            sudo -S systemctl stop wazuh-agent.service || true
-                            sudo -S apt-get remove --purge wazuh-agent -y || true
-                            wget https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.12.0-1_amd64.deb
-                            sudo -S dpkg -i wazuh-agent_4.12.0-1_amd64.deb
-                            sudo -S bash -c "sed -i 's/<address>.*<\\/address>/<address>enroll.cyberhongo.com<\\/address>/' /var/ossec/etc/ossec.conf"
-                            sudo -S systemctl enable wazuh-agent
-                            sudo -S systemctl start wazuh-agent
-                            EOF
-                            """,
-                            returnStatus: true
-                        )
+                    if (targets.size() == 0) {
+                        error "❌ No Linux targets found in CSV. Check format and contents."
+                    }
 
-                        if (result != 0) {
-                            error "❌ Linux deployment failed for ${host} (${ip})"
-                        }
+                    targets.each { row ->
+                        echo "📄 Parsed CSV row -> Hostname: ${row.hostname}, IP: ${row.ip}, User: ${row.username}, Group: ${row.group}"
+
+                        def cmd = """ssh -i "${PRIVKEY}" -o StrictHostKeyChecking=no ${row.username}@${row.ip} 'bash -s' < scripts/enroll_linux_agent.sh ${row.group}"""
+                        echo "🚀 Deploying Wazuh agent to ${row.hostname} (${row.ip})..."
+                        sh(script: cmd)
                     }
                 }
             }
@@ -59,72 +49,41 @@ pipeline {
 
         stage('Windows wave') {
             steps {
-                script {
-                    def windowsTargets = readCSV(file: 'csv/windows_targets.csv')
-                    for (row in windowsTargets) {
-                        def host = row.hostname
-                        def ip   = row.ip
-                        echo "🚀 Deploying Wazuh agent to Windows host: ${host} (${ip})..."
-
-                        def result = powershell(
-                            script: """
-                            \$secpasswd = ConvertTo-SecureString '${WIN_PASS}' -AsPlainText -Force
-                            \$cred = New-Object System.Management.Automation.PSCredential('${WIN_USER}', \$secpasswd)
-                            Invoke-Command -ComputerName ${ip} -Credential \$cred -ScriptBlock {
-                                Write-Output 'Starting Wazuh install...'
-                                # Placeholder: Copy installer + run install steps
-                            }
-                            """,
-                            returnStatus: true
-                        )
-
-                        if (result != 0) {
-                            error "❌ Windows deployment failed for ${host} (${ip})"
-                        }
-                    }
-                }
+                echo '🔧 Windows rollout to be implemented with WinRM / Ansible later...'
+                // Placeholder for PowerShell WinRM automation
             }
         }
 
         stage('Git commit & push rollout log') {
-            when {
-                expression { return fileExists('rollout_logs/') }
-            }
             steps {
                 script {
-                    sh '''
-                    git config user.name "LucidMatrixBot"
-                    git config user.email "automation@cyberhongo.com"
-                    git add rollout_logs/*
-                    git commit -m "📝 Add rollout logs $(date +%Y-%m-%dT%H:%M:%S)"
-                    git push origin main
-                    '''
+                    sh "git add rollout_logs/${LOG_FILE} || true"
+                    sh "git commit -m '📦 Rollout log update: ${LOG_FILE}' || true"
+                    sh "git push origin main || true"
                 }
             }
         }
     }
 
     post {
-        success {
-            echo '✅ Pipeline completed successfully.'
-        }
         failure {
             echo '❌ Pipeline failed. Check logs for details.'
         }
     }
 }
 
-// Helper function for reading CSV files
-def readCSV(Map args) {
-    def rows = []
-    def file = args.file
-    def content = readFile(file).split('\n')
-    def headers = content[0].split(',')
-    content.drop(1).each { line ->
-        def values = line.split(',')
-        def row = [:]
-        headers.eachWithIndex { h, i -> row[h.trim()] = values[i]?.trim() }
-        rows << row
+def readCSV(path) {
+    def lines = readFile(path).trim().split('\n')
+    def headers = lines[0].split(',').collect { it.trim() }
+    def result = []
+
+    for (int i = 1; i < lines.size(); i++) {
+        def values = lines[i].split(',').collect { it.trim() }
+        def entry = [:]
+        for (int j = 0; j < headers.size(); j++) {
+            entry[headers[j]] = values[j]
+        }
+        result << entry
     }
-    return rows
+    return result
 }
