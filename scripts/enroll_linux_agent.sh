@@ -1,34 +1,42 @@
-#!/usr/bin/env bash
+#!/bin/bash
+
 set -euo pipefail
-MANAGER_FQDN="enroll.cyberhongo.com"
-MANAGER_PORT="5443"
-ENROLL_PORT="1515"             # enrolment port on manager
 
-usage() { echo "Usage: $0 -g <wazuh_group>" ; exit 1; }
-while getopts "g:" o; do case "$o" in g) GROUP="$OPTARG";; *) usage;; esac; done
-[ -z "${GROUP:-}" ] && usage
+# Function to run commands as root if not already
+run() {
+  if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi
+}
 
-echo "[*] Checking for existing wazuh-agent…"
-if systemctl is-active --quiet wazuh-agent; then
-  sudo systemctl stop wazuh-agent
-fi
-if dpkg -l wazuh-agent &>/dev/null; then
-  sudo apt-get -y purge wazuh-agent
-  sudo rm -rf /var/ossec
-fi
+AGENT_NAME="$(hostname -s)"
+WAZUH_MANAGER="enroll.cyberhongo.com"
+WAZUH_GROUP="lucid-linux"
+WAZUH_AGENT_VERSION="4.12.0"
+WAZUH_DEB="wazuh-agent_${WAZUH_AGENT_VERSION}-1_amd64.deb"
+TMP_DIR="/tmp"
 
-echo "[*] Installing fresh agent 4.12.0…"
-wget -q https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.12.0-1_amd64.deb -O /tmp/wazuh-agent.deb
-sudo bash -c "
-  DEBIAN_FRONTEND=noninteractive \
-  dpkg -i /tmp/wazuh-agent.deb
-"
+echo -e "\033[34m:: [${AGENT_NAME}] Starting Wazuh agent enrollment ::\033[0m"
 
-echo "[*] Registering via agent-auth …"
-sudo /var/ossec/bin/agent-auth \
-     -m "$MANAGER_FQDN" -p "$ENROLL_PORT" \
-     -G "$GROUP" -A "$(hostname -s)"
+echo "[*] Stopping & purging existing agent (if any)…"
+run systemctl stop wazuh-agent || true
+run apt-get -y purge wazuh-agent || true
 
-echo "[*] Starting & enabling service…"
-sudo systemctl enable --now wazuh-agent
-echo "[✓] $(hostname -s) enrolled into Wazuh group '$GROUP'."
+echo "[*] Downloading latest Wazuh agent ${WAZUH_AGENT_VERSION}…"
+curl -s -L -o "${TMP_DIR}/${WAZUH_DEB}" \
+  "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/${WAZUH_DEB}"
+
+echo "[*] Installing agent…"
+run dpkg -i "${TMP_DIR}/${WAZUH_DEB}"
+
+echo "[*] Patching ossec.conf with manager address ${WAZUH_MANAGER}…"
+CONF="/var/ossec/etc/ossec.conf"
+run sed -i "s|<address>.*</address>|<address>${WAZUH_MANAGER}</address>|" "$CONF"
+
+echo "[*] Registering with Wazuh manager as '${AGENT_NAME}' in group '${WAZUH_GROUP}'…"
+run /var/ossec/bin/agent-auth -m "$WAZUH_MANAGER" -A "$AGENT_NAME" -G "$WAZUH_GROUP"
+
+echo "[*] Enabling and starting wazuh-agent service…"
+run systemctl daemon-reexec
+run systemctl enable wazuh-agent
+run systemctl start wazuh-agent
+
+echo -e "\033[32m✔ [${AGENT_NAME}] Enrollment complete.\033[0m"

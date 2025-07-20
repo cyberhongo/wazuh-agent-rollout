@@ -1,22 +1,18 @@
-#!/usr/bin/env bash
-# Usage: run_linux_wave.sh <csv-file> <ssh-keyfile>
-
+#!/bin/bash
 set -euo pipefail
-CSV="$1"
-KEY="$2"
+CSV_FILE="$1"
+KEY_PATH="$2"
+LOG_FILE="linux_wave_$(date +%Y%m%d_%H%M%S).log"
 
-echo -e "\n\033[34m:: Rolling out to Linux fleet ::\033[0m"
+echo ":: Rolling out to Linux fleet ::" | tee -a "$LOG_FILE"
 
-while IFS=',' read -r IP HOST USER GROUP EXTRA; do
-  [[ -z "${IP// }" || "$IP" =~ ^# ]] && continue     # skip comments / blanks
-  USER=${USER:-robot}
+while IFS=',' read -r HOSTNAME IP USER GROUP; do
+    [[ "$HOSTNAME" =~ ^#|^$ ]] && continue
 
-  echo -e "\033[36m➜  ${HOST:-$IP} ($IP) as $USER\033[0m"
+    USER=${USER:-robot}
+    echo -e "\n➜  $HOSTNAME ($IP) as $USER" | tee -a "$LOG_FILE"
 
-  scp -o StrictHostKeyChecking=no -i "$KEY" \
-      scripts/enroll_linux_agent.sh "${USER}@${IP}:/tmp/"
+    scp -i "$KEY_PATH" -o StrictHostKeyChecking=no scripts/enroll_linux_agent.sh "${USER}@${IP}:/tmp/" | tee -a "$LOG_FILE"
+    ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${USER}@${IP}" "chmod +x /tmp/enroll_linux_agent.sh && sudo /tmp/enroll_linux_agent.sh $GROUP" | tee -a "$LOG_FILE"
 
-  ssh -o StrictHostKeyChecking=no -i "$KEY" \
-      "${USER}@${IP}" \
-      "bash /tmp/enroll_linux_agent.sh -g ${GROUP}"
-done < "$CSV"
+done < "$CSV_FILE"
