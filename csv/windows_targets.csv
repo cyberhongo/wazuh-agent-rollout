@@ -1,3 +1,3 @@
-172.20.10.117,pwn1   ,Administrator ,lucid-wins
-172.20.10.114,tcsdc1 ,Administrator ,lucid-wins
-10.100.1.12 ,tcswk   ,Administrator ,lucid-wins
+pwn1,172.20.10.117,Administrator,lucid-wins
+tcsdc1,172.20.10.114,Administrator,lucid-wins
+tcswk,10.100.1.12,Administrator,lucid-wins
