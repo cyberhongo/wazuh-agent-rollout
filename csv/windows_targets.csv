@@ -1,4 +1,4 @@
-ip,hostname,username,group
+hostname,ip,username,group
 pwn1,172.20.10.117,administrator,lucid-wins
 tcsdc1,172.20.10.114,administrator,lucid-wins
 tcswk,10.100.1.12,administrator,lucid-wins

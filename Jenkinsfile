@@ -1,49 +1,64 @@
+// Jenkinsfile for Wazuh Agent Reinstallation and Enrollment (Clean Environment)
+
 pipeline {
-  agent any
-  environment {
-    SSH_USER = credentials('ssh_user')
-    PRIVKEY  = credentials('ssh_privkey')
-    WIN_USER = credentials('win_user')
-    WIN_PASS = credentials('win_pass')
-  }
-  stages {
-    stage('Checkout repo') {
-      steps {
-        checkout scm
-      }
+    agent any
+
+    environment {
+        ENROLLMENT_FQDN = "enroll.cyberhongo.com"
+        ENROLLMENT_PORT = "5443"
+        LINUX_CSV = "wazuh_agents_linux.csv"
+        GROUP_LINUX = "lucid-linux"
+        GROUP_NETOPS = "lucid-netops"
+        JENKINS_NODE_LABEL = "wazuh-deployer"
     }
-    stage('Pre-check CSV Format') {
-      steps {
-        echo '🔎 Validating Linux and Windows CSV formats...'
-        sh 'chmod +x scripts/validate_csv_format.sh'
-        sh 'scripts/validate_csv_format.sh csv/linux_targets.csv'
-        sh 'scripts/validate_csv_format.sh csv/windows_targets.csv'
-      }
+
+    stages {
+
+        stage('Clean Linux Agents') {
+            agent { label "${JENKINS_NODE_LABEL}" }
+            steps {
+                echo "Uninstalling old Wazuh agents from Linux nodes..."
+                sh '''
+                while IFS=',' read -r hostname ip user group; do
+                    echo "Uninstalling Wazuh Agent on $hostname ($ip)..."
+                    ssh -o StrictHostKeyChecking=no "$user@$ip" "sudo systemctl stop wazuh-agent; sudo /var/ossec/bin/wazuh-control stop; sudo rm -rf /var/ossec" || true
+                done < ${LINUX_CSV}
+                '''
+            }
+        }
+
+        stage('Install and Enroll Linux Agents') {
+            agent { label "${JENKINS_NODE_LABEL}" }
+            steps {
+                echo "Installing fresh Wazuh agents and enrolling via ${ENROLLMENT_FQDN}:${ENROLLMENT_PORT}..."
+                sh '''
+                while IFS=',' read -r hostname ip user group; do
+                    echo "Installing on $hostname ($ip) - Group: $group..."
+                    ssh -o StrictHostKeyChecking=no "$user@$ip" "\
+                        curl -so wazuh-agent-install.sh https://packages.wazuh.com/4.12/wazuh-agent-4.12.0-linux.sh && \
+                        sudo bash wazuh-agent-install.sh --enrollment-ip ${ENROLLMENT_FQDN} --enrollment-port ${ENROLLMENT_PORT} --agent-group $group && \
+                        sudo systemctl enable wazuh-agent && \
+                        sudo systemctl start wazuh-agent"
+                done < ${LINUX_CSV}
+                '''
+            }
+        }
+
+        stage('Verify Agents') {
+            agent { label "${JENKINS_NODE_LABEL}" }
+            steps {
+                echo 'Verifying enrolled agents on the Wazuh manager...'
+                sh '/var/ossec/bin/agent_control -lc'
+            }
+        }
     }
-    stage('Linux wave') {
-      steps {
-        echo '🚀 Running Linux rollout...'
-        sh '''
-          chmod +x scripts/rollout_linux.sh
-          scripts/rollout_linux.sh csv/linux_targets.csv "$SSH_USER" "$PRIVKEY"
-        '''
-      }
+
+    post {
+        failure {
+            echo 'Wazuh agent deployment pipeline FAILED.'
+        }
+        success {
+            echo 'All Wazuh agents successfully installed and enrolled.'
+        }
     }
-    stage('Windows wave') {
-      when {
-        expression { return false } // Temporarily disabled until finalized
-      }
-      steps {
-        echo '🚀 Running Windows rollout...'
-      }
-    }
-  }
-  post {
-    failure {
-      echo '❌ Pipeline failed. Check logs for details.'
-    }
-    success {
-      echo '✅ Pipeline succeeded.'
-    }
-  }
 }
