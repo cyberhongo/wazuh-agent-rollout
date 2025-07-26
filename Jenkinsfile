@@ -1,93 +1,99 @@
 pipeline {
-    agent none
+    agent any
 
     environment {
-        ENV_FILE = '.env'
+        // Load from .env file in root directory
+        AGENT_DEB_URL = "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.12.0-1_amd64.deb"
+        MANAGER_FQDN = "enroll.cyberhongo.com"
+        AGENT_GROUP = "lucid-linux"
+    }
+
+    options {
+        ansiColor('xterm')
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '15'))
     }
 
     stages {
-        stage('Initialize') {
-            agent { label 'linux-agent-01' }
+
+        stage('Validate Linux Targets CSV') {
             steps {
-                echo "[+] Initializing environment..."
+                echo 'Validating linux_targets.csv format...'
+                sh 'bash scripts/validate_csv_format.sh csv/linux_targets.csv'
+            }
+        }
 
-                // Ensure .env exists
-                sh '''
-                    if [ ! -f "$ENV_FILE" ]; then
-                        echo "[ERROR] Missing .env file"
-                        exit 1
-                    fi
-                '''
-
-                // Load environment variables
+        stage('Clean Linux Agents') {
+            steps {
                 script {
-                    def envVars = readFile('.env').split('\n')
-                    envVars.each {
-                        def kv = it.trim().split('=')
-                        if (kv.length == 2) {
-                            env[kv[0]] = kv[1]
-                        }
+                    def targets = readCSV(file: 'csv/linux_targets.csv')
+                    for (row in targets) {
+                        def host = row.hostname
+                        def user = row.username ?: 'robot'
+
+                        echo "Cleaning Wazuh agent on ${host} as ${user}..."
+
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ${user}@${host} '
+                            bash -s' < scripts/cleanup_agents.sh
+                        """
                     }
                 }
             }
         }
 
-        stage('Clean Linux Agents') {
-            agent { label 'linux-agent-01' }
-            steps {
-                echo "[*] Cleaning Linux agents..."
-                sh '''
-                    chmod +x scripts/cleanup_agents.sh
-                    ./scripts/cleanup_agents.sh csv/linux_targets.csv
-                '''
-            }
-        }
-
-        stage('Clean Windows Agents') {
-            agent { label 'windows-agent-01' }
-            steps {
-                echo "[*] Skipping Windows cleanup - manual for now."
-                // Future: call PowerShell cleanup via file share or WinRM
-            }
-        }
-
         stage('Install Linux Agents') {
-            agent { label 'linux-agent-01' }
             steps {
-                echo "[*] Installing Wazuh agents on Linux..."
-                sh '''
-                    chmod +x scripts/install_agents.sh
-                    ./scripts/install_agents.sh csv/linux_targets.csv
-                '''
-            }
-        }
+                script {
+                    def targets = readCSV(file: 'csv/linux_targets.csv')
+                    for (row in targets) {
+                        def host = row.hostname
+                        def user = row.username ?: 'robot'
 
-        stage('Enroll Linux Agents') {
-            agent { label 'linux-agent-01' }
-            steps {
-                echo "[*] Enrolling Linux agents..."
-                sh '''
-                    chmod +x scripts/enroll_linux_agent.sh
-                    ./scripts/enroll_linux_agent.sh csv/linux_targets.csv
-                '''
-            }
-        }
+                        echo "Installing Wazuh agent on ${host} as ${user}..."
 
-        stage('Enroll Windows Agents') {
-            agent { label 'windows-agent-01' }
-            steps {
-                echo "[*] Manual step - run install_wazuh_agent.ps1 from shared folder."
-                echo "[*] Example: http://fileserver/install_wazuh_agent.ps1"
+                        sh """
+                        ssh -o StrictHostKeyChecking=no ${user}@${host} '
+                            AGENT_DEB_URL="${AGENT_DEB_URL}" \
+                            MANAGER_FQDN="${MANAGER_FQDN}" \
+                            AGENT_GROUP="${AGENT_GROUP}" \
+                            bash -s' < scripts/install_agents.sh
+                        """
+                    }
+                }
             }
         }
     }
 
     post {
-        success {
-            echo "[+] Wazuh agent deployment complete!"
-        }
         failure {
-            echo "[!] Pipeline failed. Check logs above."
+            mail to: 'ops@lucidityconsult.net',
+                 subject: "❌ Jenkins Build #${env.BUILD_NUMBER} Failed: Wazuh Agent Deployment",
+                 body: "Check the Jenkins job output at ${env.BUILD_URL}"
+        }
+        success {
+            echo "✅ All Wazuh Linux agents enrolled successfully to ${MANAGER_FQDN}."
         }
     }
+}
+
+// Helper function to read CSV
+def readCSV(Map args) {
+    def file = args.file
+    def data = []
+
+    if (!file?.trim()) error "CSV file path not provided"
+
+    def csvContent = readFile(file).trim()
+    def lines = csvContent.split("\n")
+
+    lines.drop(1).each { line ->
+        def parts = line.split(",")
+        if (parts.size() >= 2) {
+            data << [hostname: parts[0].trim(), username: parts[1].trim()]
+        } else {
+            error "Invalid CSV line: ${line}"
+        }
+    }
+    return data
 }

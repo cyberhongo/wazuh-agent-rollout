@@ -1,35 +1,51 @@
 #!/bin/bash
+
+# Purpose: Install Wazuh Agent 4.12.0-1 and enroll with correct manager and group
+# Version: v1.2
+# Author: Lucidity Consulting | robot@cyberhongo
+
 set -euo pipefail
 
-CSV_FILE="csv/linux_targets.csv"
-KEY_PATH="/root/.ssh/jenkins_id"
-ENROLL_SCRIPT="./scripts/enroll_linux_agent.sh"
+AGENT_VERSION="4.12.0-1"
+AGENT_DEB_URL="https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_${AGENT_VERSION}_amd64.deb"
+AGENT_DEB_FILE="wazuh-agent_${AGENT_VERSION}_amd64.deb"
 
-# Load env vars
-source .env
+MANAGER="enroll.cyberhongo.com"
+PORT=5443
+GROUP="${WAZUH_AGENT_GROUP:-lucid-linux}"
 
-# Validate required variables
-: "${ENROLL_FQDN:?ENROLL_FQDN is not set in .env}"
-: "${ENROLL_PORT:?ENROLL_PORT is not set in .env}"
-: "${ENROLL_SECRET:?ENROLL_SECRET is not set in .env}"
+log() {
+  echo -e "[INFO] $1"
+}
 
-echo "[*] Starting Wazuh agent installation for Linux hosts..."
+err() {
+  echo -e "[ERROR] $1" >&2
+  exit 1
+}
 
-while IFS=',' read -r HOST IP USER GROUP; do
-    [[ "$HOST" =~ ^#|^$ ]] && continue
+install_agent() {
+  log "Updating APT cache..."
+  sudo apt-get update -qq
 
-    echo "[*] Processing $HOST ($IP) as user $USER in group $GROUP"
+  log "Downloading Wazuh agent ${AGENT_VERSION}..."
+  wget -q "$AGENT_DEB_URL" -O "$AGENT_DEB_FILE"
 
-    ssh -o StrictHostKeyChecking=no -i "$KEY_PATH" "$USER@$IP" bash -s <<EOF
-        curl -sO https://packages.wazuh.com/4.12/wazuh-agent-4.12.0.deb
-        sudo dpkg -i wazuh-agent-4.12.0.deb || sudo apt-get install -f -y
-        sudo systemctl enable wazuh-agent
-EOF
+  log "Installing agent..."
+  sudo dpkg -i "./$AGENT_DEB_FILE" || sudo apt-get install -f -y
 
-    echo "[*] Enrolling $HOST into group $GROUP via $ENROLL_FQDN:$ENROLL_PORT"
-    bash "$ENROLL_SCRIPT" "$IP" "$USER" "$GROUP" "$KEY_PATH"
+  log "Setting manager IP to $MANAGER:$PORT and group to $GROUP..."
+  sudo WAZUH_MANAGER="$MANAGER" \
+       WAZUH_MANAGER_PORT="$PORT" \
+       WAZUH_AGENT_GROUP="$GROUP" \
+       /var/ossec/bin/agent-auth -m "$MANAGER" -p "$PORT" -g "$GROUP"
 
-    echo "[*] $HOST enrolled successfully."
-done < "$CSV_FILE"
+  log "Enabling and starting Wazuh agent..."
+  sudo systemctl daemon-reexec
+  sudo systemctl enable wazuh-agent
+  sudo systemctl start wazuh-agent
 
-echo "[✔] All Linux agents installed and enrolled."
+  log "✅ Agent installed and enrolled successfully."
+}
+
+# Run
+install_agent
