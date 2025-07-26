@@ -1,4 +1,4 @@
-hostname,ip,username,group
+ip,hostname,username,group
 gvm,10.100.1.148,robot,lucid-linux
 n8n,172.20.10.111,robot,lucid-linux
 plx1,172.20.10.112,robot,lucid-linux
