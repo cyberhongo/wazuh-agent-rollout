@@ -1,7 +1,7 @@
 param(
   [String]$Group      = 'lucid-wins',
   [String]$ManagerFQDN= 'enroll.cyberhongo.com',
-  [Int]   $Port       = 1514
+  [Int]   $Port       = 1515
 )
 $ErrorActionPreference = 'Stop'
 
