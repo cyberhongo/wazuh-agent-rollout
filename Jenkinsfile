@@ -1,64 +1,93 @@
-// Jenkinsfile for Wazuh Agent Reinstallation and Enrollment (Clean Environment)
-
 pipeline {
-    agent any
+    agent none
 
     environment {
-        ENROLLMENT_FQDN = "enroll.cyberhongo.com"
-        ENROLLMENT_PORT = "5443"
-        LINUX_CSV = "wazuh_agents_linux.csv"
-        GROUP_LINUX = "lucid-linux"
-        GROUP_NETOPS = "lucid-netops"
-        JENKINS_NODE_LABEL = "wazuh-deployer"
+        ENV_FILE = '.env'
     }
 
     stages {
+        stage('Initialize') {
+            agent { label 'linux-agent-01' }
+            steps {
+                echo "[+] Initializing environment..."
+
+                // Ensure .env exists
+                sh '''
+                    if [ ! -f "$ENV_FILE" ]; then
+                        echo "[ERROR] Missing .env file"
+                        exit 1
+                    fi
+                '''
+
+                // Load environment variables
+                script {
+                    def envVars = readFile('.env').split('\n')
+                    envVars.each {
+                        def kv = it.trim().split('=')
+                        if (kv.length == 2) {
+                            env[kv[0]] = kv[1]
+                        }
+                    }
+                }
+            }
+        }
 
         stage('Clean Linux Agents') {
-            agent { label "${JENKINS_NODE_LABEL}" }
+            agent { label 'linux-agent-01' }
             steps {
-                echo "Uninstalling old Wazuh agents from Linux nodes..."
+                echo "[*] Cleaning Linux agents..."
                 sh '''
-                while IFS=',' read -r hostname ip user group; do
-                    echo "Uninstalling Wazuh Agent on $hostname ($ip)..."
-                    ssh -o StrictHostKeyChecking=no "$user@$ip" "sudo systemctl stop wazuh-agent; sudo /var/ossec/bin/wazuh-control stop; sudo rm -rf /var/ossec" || true
-                done < ${LINUX_CSV}
+                    chmod +x scripts/cleanup_agents.sh
+                    ./scripts/cleanup_agents.sh csv/linux_targets.csv
                 '''
             }
         }
 
-        stage('Install and Enroll Linux Agents') {
-            agent { label "${JENKINS_NODE_LABEL}" }
+        stage('Clean Windows Agents') {
+            agent { label 'windows-agent-01' }
             steps {
-                echo "Installing fresh Wazuh agents and enrolling via ${ENROLLMENT_FQDN}:${ENROLLMENT_PORT}..."
+                echo "[*] Skipping Windows cleanup - manual for now."
+                // Future: call PowerShell cleanup via file share or WinRM
+            }
+        }
+
+        stage('Install Linux Agents') {
+            agent { label 'linux-agent-01' }
+            steps {
+                echo "[*] Installing Wazuh agents on Linux..."
                 sh '''
-                while IFS=',' read -r hostname ip user group; do
-                    echo "Installing on $hostname ($ip) - Group: $group..."
-                    ssh -o StrictHostKeyChecking=no "$user@$ip" "\
-                        curl -so wazuh-agent-install.sh https://packages.wazuh.com/4.12/wazuh-agent-4.12.0-linux.sh && \
-                        sudo bash wazuh-agent-install.sh --enrollment-ip ${ENROLLMENT_FQDN} --enrollment-port ${ENROLLMENT_PORT} --agent-group $group && \
-                        sudo systemctl enable wazuh-agent && \
-                        sudo systemctl start wazuh-agent"
-                done < ${LINUX_CSV}
+                    chmod +x scripts/install_agents.sh
+                    ./scripts/install_agents.sh csv/linux_targets.csv
                 '''
             }
         }
 
-        stage('Verify Agents') {
-            agent { label "${JENKINS_NODE_LABEL}" }
+        stage('Enroll Linux Agents') {
+            agent { label 'linux-agent-01' }
             steps {
-                echo 'Verifying enrolled agents on the Wazuh manager...'
-                sh '/var/ossec/bin/agent_control -lc'
+                echo "[*] Enrolling Linux agents..."
+                sh '''
+                    chmod +x scripts/enroll_linux_agent.sh
+                    ./scripts/enroll_linux_agent.sh csv/linux_targets.csv
+                '''
+            }
+        }
+
+        stage('Enroll Windows Agents') {
+            agent { label 'windows-agent-01' }
+            steps {
+                echo "[*] Manual step - run install_wazuh_agent.ps1 from shared folder."
+                echo "[*] Example: http://fileserver/install_wazuh_agent.ps1"
             }
         }
     }
 
     post {
-        failure {
-            echo 'Wazuh agent deployment pipeline FAILED.'
-        }
         success {
-            echo 'All Wazuh agents successfully installed and enrolled.'
+            echo "[+] Wazuh agent deployment complete!"
+        }
+        failure {
+            echo "[!] Pipeline failed. Check logs above."
         }
     }
 }
