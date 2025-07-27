@@ -1,74 +1,46 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
-# Defaults
-CSV_FILE="csv/linux_targets.csv"
-SSH_USER="robot"
-SSH_KEY="$HOME/.ssh/id_rsa"
+# Default values
+CSV_PATH=""
+SSH_KEY=""
+SSH_USER="jenkins"
 
-# Parse arguments
+# Parse arguments first
 while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    --csv)
-      CSV_FILE="$2"
-      shift 2
-      ;;
-    --ssh-user)
-      SSH_USER="$2"
-      shift 2
-      ;;
-    --ssh-key)
-      SSH_KEY="$2"
-      shift 2
-      ;;
-    *)
-      echo "[ERROR] Unknown argument: $1" >&2
-      exit 1
-      ;;
+  case $1 in
+    --csv) CSV_PATH="$2"; shift ;;
+    --ssh-key) SSH_KEY="$2"; shift ;;
+    --ssh-user) SSH_USER="$2"; shift ;;
+    *) echo "Unknown parameter passed: $1"; exit 1 ;;
   esac
+  shift
 done
 
-# Validate inputs
-if [[ ! -f "$CSV_FILE" ]]; then
-  echo "[ERROR] CSV file not found: $CSV_FILE"
+# Validate
+if [[ -z "$CSV_PATH" || -z "$SSH_KEY" || -z "$SSH_USER" ]]; then
+  echo "[ERROR] Missing required parameters."
+  echo "Usage: $0 --csv <path> --ssh-key <private_key> --ssh-user <user>"
   exit 1
 fi
 
-if [[ ! -f "$SSH_KEY" ]]; then
-  echo "[ERROR] SSH private key not found: $SSH_KEY"
-  exit 1
+PUB_KEY="${SSH_KEY}.pub"
+
+# Generate public key if not exists
+if [[ ! -f "$PUB_KEY" ]]; then
+  echo "[WARN] SSH public key not found at $PUB_KEY — generating..."
+  ssh-keygen -y -f "$SSH_KEY" > "$PUB_KEY"
+  echo "[INFO] Generated public key: $PUB_KEY"
 fi
 
-# Ensure .pub key exists or generate it
-SSH_PUB_KEY="${SSH_KEY}.pub"
-if [[ ! -f "$SSH_PUB_KEY" ]]; then
-  echo "[WARN] SSH public key not found at $SSH_PUB_KEY — generating..."
-  ssh-keygen -y -f "$SSH_KEY" > "$SSH_PUB_KEY"
-  chmod 600 "$SSH_PUB_KEY"
-  echo "[INFO] Generated public key: $SSH_PUB_KEY"
-fi
-
-echo "[INFO] Using target CSV: $CSV_FILE"
+echo "[INFO] Using target CSV: $CSV_PATH"
 echo "[INFO] Using SSH user: $SSH_USER"
 echo "[INFO] Using SSH key: $SSH_KEY"
 
-# Ensure scripts exist
-DEPLOY_KEY_SCRIPT="scripts/deploy_ssh_pubkeys.sh"
-AGENT_ENROLL_SCRIPT="scripts/enroll_linux_agent.sh"
-
-for script in "$DEPLOY_KEY_SCRIPT" "$AGENT_ENROLL_SCRIPT"; do
-  if [[ ! -x "$script" ]]; then
-    echo "[ERROR] Required script missing or not executable: $script"
-    exit 1
-  fi
-done
-
-# Deploy SSH keys to targets
+# Deploy SSH key to targets
 echo "[INFO] Deploying SSH key to all targets..."
-bash "$DEPLOY_KEY_SCRIPT" --csv "$CSV_FILE" --ssh-key "$SSH_KEY" --ssh-user "$SSH_USER"
+scripts/deploy_ssh_pubkeys.sh "$PUB_KEY" ""
 
-# Enroll Wazuh agents
-echo "[INFO] Installing and enrolling Wazuh agents..."
-bash "$AGENT_ENROLL_SCRIPT" --csv "$CSV_FILE" --ssh-key "$SSH_KEY" --ssh-user "$SSH_USER"
-
-echo "[SUCCESS] All Linux agents processed successfully."
+# Run installer
+echo "[INFO] Installing Wazuh agent on all targets..."
+scripts/rollout_linux.sh --csv "$CSV_PATH" --ssh-user "$SSH_USER" --ssh-key "$SSH_KEY"
