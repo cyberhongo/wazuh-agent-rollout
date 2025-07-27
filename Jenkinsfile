@@ -2,11 +2,9 @@ pipeline {
   agent any
 
   environment {
-    DEFAULT_PASS = credentials('DEFAULT_PASS') // Set this via Jenkins credentials
-    CSV_PATH = "csv/linux_targets.csv"
-    DEPLOY_SCRIPT = "scripts/install_agents.sh"
-    LOG_PATH = "logs/install.log"
-    // We no longer inject SSH_PRIVATE_KEY_PATH here
+    CSV_PATH     = 'csv/linux_targets.csv'
+    DEPLOY_SCRIPT = 'scripts/install_agents.sh'
+    LOG_PATH     = 'install.log'
   }
 
   stages {
@@ -17,37 +15,38 @@ pipeline {
     }
 
     stage('Install Wazuh Agent') {
+      environment {
+        PUBKEY_PATH = "${WORKSPACE}/id_rsa.pub"
+      }
       steps {
-        sh '''
-          echo "[INFO] Starting Wazuh agent install job..."
+        withCredentials([
+          sshUserPrivateKey(credentialsId: 'jenkins_ssh_key',
+                            keyFileVariable: 'SSH_KEY_FILE',
+                            usernameVariable: 'SSH_USER'),
+          string(credentialsId: 'wazuh_default_pass', variable: 'DEFAULT_PASS')
+        ]) {
+          sh '''
+            echo "[INFO] Starting Wazuh agent install job..."
 
-          # Confirm CSV file exists
-          if [ ! -f "${CSV_PATH}" ]; then
-            echo "[ERROR] CSV file not found: ${CSV_PATH}"
-            exit 1
-          fi
+            echo "[INFO] Generating public key from injected private key..."
+            ssh-keygen -y -f "$SSH_KEY_FILE" > "$PUBKEY_PATH"
+            chmod 644 "$PUBKEY_PATH"
 
-          # Optional: fallback key path
-          KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_rsa.pub}"
-
-          if [ ! -f "$KEY_PATH" ]; then
-            echo "[ERROR] SSH public key not found: $KEY_PATH"
-            exit 1
-          fi
-
-          chmod +x ${DEPLOY_SCRIPT}
-          ${DEPLOY_SCRIPT} --csv ${CSV_PATH} --password ${DEFAULT_PASS} --pubkey ${KEY_PATH} | tee ${LOG_PATH}
-        '''
+            echo "[INFO] Launching rollout script with injected key..."
+            chmod +x ${DEPLOY_SCRIPT}
+            ${DEPLOY_SCRIPT} --csv ${CSV_PATH} --password "${DEFAULT_PASS}" --pubkey "$PUBKEY_PATH" | tee ${LOG_PATH}
+          '''
+        }
       }
     }
   }
 
   post {
     failure {
-      echo "[ERROR] Wazuh agent install job failed."
+      echo '[ERROR] Wazuh agent install job failed.'
     }
     success {
-      echo "[SUCCESS] Wazuh agent install job completed successfully."
+      echo '[INFO] Wazuh agent rollout completed successfully.'
     }
   }
 }
