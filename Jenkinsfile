@@ -2,54 +2,37 @@ pipeline {
   agent any
 
   environment {
-    // Injects the Jenkins secret text credential with ID 'default-linux-password'
-    DEFAULT_PASS = credentials('default-linux-password')
-  }
-
-  options {
-    timestamps()
-    ansiColor('xterm')
+    // This assumes you've added the secret in Jenkins credentials
+    // Adjust these IDs or inline values as needed
+    DEFAULT_PASS = credentials('DEFAULT_PASS') 
+    SSH_KEY_PATH = credentials('SSH_PRIVATE_KEY_PATH')
   }
 
   stages {
-
-    stage('Checkout Code') {
+    stage('Install Linux Agents') {
       steps {
-        git credentialsId: 'jenkins_git', url: 'https://github.com/cyberhongo/wazuh-agent-rollout', branch: 'main'
-      }
-    }
-
-    stage('Verify CSV Format') {
-      steps {
-        sh 'bash scripts/validate_csv_format.sh'
-      }
-    }
-
-    stage('Deploy SSH Keys') {
-      steps {
-        sh 'bash scripts/deploy_ssh_pubkeys.sh'
-      }
-    }
-
-    stage('Install Wazuh Agents') {
-      steps {
+        echo "[INFO] Starting Wazuh Agent Install Pipeline"
         sh '''
+          echo "[INFO] Current working directory: $(pwd)"
+          echo "[INFO] Listing project files:"
+          find . -type f
+
+          # Make sure script is executable
           chmod +x scripts/install_agents.sh
-          ./scripts/install_agents.sh
+
+          # Run the install script with correct CSV path and env var for password
+          scripts/install_agents.sh ./csv/linux_targets.csv "$DEFAULT_PASS"
         '''
       }
     }
   }
 
   post {
-    success {
-      echo "[SUCCESS] Wazuh agent installation pipeline completed."
-    }
     failure {
-      echo "[FAILURE] Pipeline failed. Check logs and investigate immediately."
+      echo '[ERROR] Wazuh agent install job failed.'
     }
-    always {
-      echo "[INFO] Wazuh rollout job has finished executing."
+    success {
+      echo '[SUCCESS] Wazuh agents installed successfully.'
     }
   }
 }
