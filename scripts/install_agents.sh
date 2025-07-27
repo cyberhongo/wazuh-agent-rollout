@@ -1,13 +1,21 @@
 #!/bin/bash
-
-# install_agents.sh
-# Description: Installs Wazuh agent on Linux targets and enrolls them using agent-auth
-# Uses SSH key-based access from the Jenkins agent host
-
 set -e
 
+# Defaults
 CSV_FILE="csv/linux_targets.csv"
 KEY_PATH="$HOME/.ssh/id_rsa.pub"
+
+# Parse args
+while [[ "$#" -gt 0 ]]; do
+  case $1 in
+    --csv) CSV_FILE="$2"; shift ;;
+    --pubkey) KEY_PATH="$2"; shift ;;
+    --password) DEFAULT_PASS="$2"; shift ;; # Placeholder if needed later
+    *) echo "[ERROR] Unknown parameter passed: $1"; exit 1 ;;
+  esac
+  shift
+done
+
 AGENT_INSTALL_SCRIPT="scripts/enroll_linux_agent.sh"
 DEPLOY_KEY_SCRIPT="scripts/deploy_ssh_pubkeys.sh"
 
