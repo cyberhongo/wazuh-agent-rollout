@@ -9,7 +9,6 @@ ip,hostname,username,group
 10.100.1.155,pve02,root,lucid-linux
 172.20.10.112,plx1,robot,lucid-linux
 172.20.10.101,misp,robot,lucid-linux
-172.20.10.90,gpxy,robot,lucid-linux
 172.20.10.10,dev1,robot,lucid-linux
 172.20.10.11,prod1,robot,lucid-linux
 172.20.10.12,notebook,robot,lucid-linux
