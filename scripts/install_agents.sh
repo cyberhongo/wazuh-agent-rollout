@@ -1,65 +1,62 @@
 #!/bin/bash
+
 set -euo pipefail
 
-# Defaults
-CSV_FILE="csv/linux_targets.csv"
-SSH_USER="robot"
-SSH_KEY="$HOME/.ssh/id_rsa"
+CSV=""
+SSH_USER=""
+SSH_KEY=""
+DEFAULT_PASS="changeme"
 
-# Parse arguments
-while [[ "$#" -gt 0 ]]; do
+# Usage
+usage() {
+  echo "Usage: $0 --csv <csv_file> --ssh-key <private_key_path> --ssh-user <username>"
+  exit 1
+}
+
+# Parse args
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --csv)
-      CSV_FILE="$2"
-      shift 2
-      ;;
-    --ssh-user)
-      SSH_USER="$2"
+      CSV="$2"
       shift 2
       ;;
     --ssh-key)
       SSH_KEY="$2"
       shift 2
       ;;
+    --ssh-user)
+      SSH_USER="$2"
+      shift 2
+      ;;
     *)
-      echo "[ERROR] Unknown argument: $1" >&2
-      exit 1
+      echo "[ERROR] Unknown option: $1"
+      usage
       ;;
   esac
 done
 
-# Validate inputs
-if [[ ! -f "$CSV_FILE" ]]; then
-  echo "[ERROR] CSV file not found: $CSV_FILE"
-  exit 1
-fi
+# Validate
+[[ -z "$CSV" || -z "$SSH_USER" || -z "$SSH_KEY" ]] && usage
 
-if [[ ! -f "$SSH_KEY" ]]; then
-  echo "[ERROR] SSH private key not found: $SSH_KEY"
-  exit 1
-fi
-
-echo "[INFO] Using target CSV: $CSV_FILE"
+echo "[INFO] Using target CSV: $CSV"
 echo "[INFO] Using SSH user: $SSH_USER"
 echo "[INFO] Using SSH key: $SSH_KEY"
 
-# Ensure scripts exist
-DEPLOY_KEY_SCRIPT="scripts/deploy_ssh_pubkeys.sh"
-AGENT_ENROLL_SCRIPT="scripts/enroll_linux_agent.sh"
+# Convert private key to public key path
+PUB_KEY="${SSH_KEY}.pub"
 
-for script in "$DEPLOY_KEY_SCRIPT" "$AGENT_ENROLL_SCRIPT"; do
-  if [[ ! -x "$script" ]]; then
-    echo "[ERROR] Required script missing or not executable: $script"
-    exit 1
-  fi
-done
+# Validate pubkey
+if [[ ! -f "$PUB_KEY" ]]; then
+  echo "[ERROR] SSH public key not found at $PUB_KEY"
+  exit 1
+fi
 
-# Deploy SSH keys to targets
+# Step 1: Deploy SSH keys
 echo "[INFO] Deploying SSH key to all targets..."
-bash "$DEPLOY_KEY_SCRIPT" --csv "$CSV_FILE" --ssh-key "$SSH_KEY" --ssh-user "$SSH_USER"
+scripts/deploy_ssh_pubkeys.sh "$PUB_KEY" "$DEFAULT_PASS"
 
-# Enroll Wazuh agents
-echo "[INFO] Installing and enrolling Wazuh agents..."
-bash "$AGENT_ENROLL_SCRIPT" --csv "$CSV_FILE" --ssh-key "$SSH_KEY" --ssh-user "$SSH_USER"
+# Step 2: Run rollout
+echo "[INFO] Running Linux agent rollout..."
+scripts/rollout_linux.sh "$CSV" "$SSH_USER" "$SSH_KEY"
 
-echo "[SUCCESS] All Linux agents processed successfully."
+echo "[INFO] Linux Wazuh agent rollout complete."
