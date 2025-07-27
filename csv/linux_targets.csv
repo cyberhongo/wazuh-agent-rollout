@@ -1,12 +1,11 @@
 ip,hostname,username,group
-172.20.10.148,gvm,robot,lucid-linux
+10.100.1.148,gvm,robot,lucid-linux
 10.100.1.3,tcsdns01,robot,lucid-linux
 10.100.1.4,apps,robot,lucid-linux
 172.20.10.235,Util,robot,lucid-linux
 172.20.10.110,syslg,robot,lucid-linux
-172.20.10.102,sdb,robot,lucid-linux
+172.20.10.104,sdb,robot,lucid-linux
 172.20.10.111,n8n,robot,lucid-linux
-10.100.1.2,vMedia,robot,lucid-linux
 10.100.1.155,pve02,root,lucid-linux
 172.20.10.112,plx1,robot,lucid-linux
 172.20.10.101,misp,robot,lucid-linux
@@ -14,3 +13,5 @@ ip,hostname,username,group
 172.20.10.10,dev1,robot,lucid-linux
 172.20.10.11,prod1,robot,lucid-linux
 172.20.10.12,notebook,robot,lucid-linux
+10.100.1.81,web,robot,lucid-linux
+
