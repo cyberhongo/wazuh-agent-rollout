@@ -1,42 +1,55 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        DEFAULT_PASS = credentials('default-linux-password')
-        PUBKEY_PATH  = credentials('linux-ssh-pubkey')
+  environment {
+    // Injects the Jenkins secret text credential with ID 'default-linux-password'
+    DEFAULT_PASS = credentials('default-linux-password')
+  }
+
+  options {
+    timestamps()
+    ansiColor('xterm')
+  }
+
+  stages {
+
+    stage('Checkout Code') {
+      steps {
+        git credentialsId: 'jenkins_git', url: 'https://github.com/cyberhongo/wazuh-agent-rollout', branch: 'main'
+      }
     }
 
-    stages {
-
-        stage('Deploy SSH Public Keys') {
-            steps {
-                echo "[INFO] Deploying SSH keys to Linux targets"
-                sh '''
-                bash scripts/deploy_ssh_pubkeys.sh "$PUBKEY_PATH" "$DEFAULT_PASS"
-                '''
-            }
-        }
-
-        stage('Install Linux Wazuh Agents') {
-            steps {
-                echo "[INFO] Installing Wazuh agent on all Linux hosts"
-                sh 'bash scripts/run_linux_wave.sh'
-            }
-        }
-
-        stage('Install Windows Wazuh Agents') {
-            steps {
-                echo "[INFO] Manual run required for Windows hosts. Skipping this stage for now."
-            }
-        }
+    stage('Verify CSV Format') {
+      steps {
+        sh 'bash scripts/validate_csv_format.sh'
+      }
     }
 
-    post {
-        failure {
-            echo "[ERROR] Pipeline failed. Check logs for details."
-        }
-        success {
-            echo "[INFO] SSH deployment and Linux agent install complete."
-        }
+    stage('Deploy SSH Keys') {
+      steps {
+        sh 'bash scripts/deploy_ssh_pubkeys.sh'
+      }
     }
+
+    stage('Install Wazuh Agents') {
+      steps {
+        sh '''
+          chmod +x scripts/install_agents.sh
+          ./scripts/install_agents.sh
+        '''
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "[SUCCESS] Wazuh agent installation pipeline completed."
+    }
+    failure {
+      echo "[FAILURE] Pipeline failed. Check logs and investigate immediately."
+    }
+    always {
+      echo "[INFO] Wazuh rollout job has finished executing."
+    }
+  }
 }
