@@ -1,46 +1,34 @@
 #!/bin/bash
 set -e
 
-# Default values
-CSV_PATH=""
-SSH_KEY=""
-SSH_USER="jenkins"
+# Defaults
+CSV_FILE="csv/linux_targets.csv"
+KEY_PATH="$HOME/.ssh/id_rsa.pub"
+SSH_USER=""
+DEFAULT_PASS=""
 
-# Parse arguments first
+# Parse CLI Arguments
 while [[ "$#" -gt 0 ]]; do
   case $1 in
-    --csv) CSV_PATH="$2"; shift ;;
-    --ssh-key) SSH_KEY="$2"; shift ;;
+    --csv) CSV_FILE="$2"; shift ;;
+    --ssh-key) KEY_PATH="$2"; shift ;;
     --ssh-user) SSH_USER="$2"; shift ;;
-    *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    --password) DEFAULT_PASS="$2"; shift ;;
+    *) echo -e "\033[0;31m[ERROR]\033[0m Unknown parameter: $1"; exit 1 ;;
   esac
   shift
 done
 
-# Validate
-if [[ -z "$CSV_PATH" || -z "$SSH_KEY" || -z "$SSH_USER" ]]; then
-  echo "[ERROR] Missing required parameters."
-  echo "Usage: $0 --csv <path> --ssh-key <private_key> --ssh-user <user>"
-  exit 1
-fi
+# Validations
+[[ -f "$CSV_FILE" ]] || { echo -e "\033[0;31m[ERROR]\033[0m CSV file not found: $CSV_FILE"; exit 1; }
+[[ -f "$KEY_PATH" ]] || { echo -e "\033[0;31m[ERROR]\033[0m SSH public key not found: $KEY_PATH"; exit 1; }
+[[ -n "$SSH_USER" ]] || { echo -e "\033[0;31m[ERROR]\033[0m SSH_USER not provided."; exit 1; }
+[[ -n "$DEFAULT_PASS" ]] || { echo -e "\033[0;31m[ERROR]\033[0m DEFAULT_PASS not provided."; exit 1; }
 
-PUB_KEY="${SSH_KEY}.pub"
+echo "[INFO] Deploying SSH key to Linux targets using: $KEY_PATH"
+bash scripts/deploy_ssh_pubkeys.sh "$CSV_FILE" "$KEY_PATH" "$SSH_USER" "$DEFAULT_PASS"
 
-# Generate public key if not exists
-if [[ ! -f "$PUB_KEY" ]]; then
-  echo "[WARN] SSH public key not found at $PUB_KEY — generating..."
-  ssh-keygen -y -f "$SSH_KEY" > "$PUB_KEY"
-  echo "[INFO] Generated public key: $PUB_KEY"
-fi
+echo "[INFO] Installing Wazuh agent on Linux targets..."
+bash scripts/enroll_linux_agent.sh "$CSV_FILE" "$SSH_USER" "$KEY_PATH" "$DEFAULT_PASS"
 
-echo "[INFO] Using target CSV: $CSV_PATH"
-echo "[INFO] Using SSH user: $SSH_USER"
-echo "[INFO] Using SSH key: $SSH_KEY"
-
-# Deploy SSH key to targets
-echo "[INFO] Deploying SSH key to all targets..."
-scripts/deploy_ssh_pubkeys.sh "$PUB_KEY" ""
-
-# Run installer
-echo "[INFO] Installing Wazuh agent on all targets..."
-scripts/rollout_linux.sh --csv "$CSV_PATH" --ssh-user "$SSH_USER" --ssh-key "$SSH_KEY"
+echo "[INFO] Wazuh agent installation completed successfully."
