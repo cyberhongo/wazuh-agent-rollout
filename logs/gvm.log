@@ -1,0 +1,4 @@
+[INFO] Installing Wazuh agent for group: lucid-linux
+[INFO] Downloading Wazuh agent 4.12.0-1...
+curl: (23) client returned ERROR on write of 2398 bytes
+[ERROR] Failed to download Wazuh agent.

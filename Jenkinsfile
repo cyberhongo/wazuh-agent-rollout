@@ -2,26 +2,41 @@ pipeline {
   agent any
 
   environment {
-    // This assumes you've added the secret in Jenkins credentials
-    // Adjust these IDs or inline values as needed
-    DEFAULT_PASS = credentials('DEFAULT_PASS') 
-    SSH_KEY_PATH = credentials('SSH_PRIVATE_KEY_PATH')
+    DEFAULT_PASS = credentials('DEFAULT_PASS') // Set this via Jenkins credentials
+    CSV_PATH = "csv/linux_targets.csv"
+    DEPLOY_SCRIPT = "scripts/install_agents.sh"
+    LOG_PATH = "logs/install.log"
+    // We no longer inject SSH_PRIVATE_KEY_PATH here
   }
 
   stages {
-    stage('Install Linux Agents') {
+    stage('Checkout') {
       steps {
-        echo "[INFO] Starting Wazuh Agent Install Pipeline"
+        checkout scm
+      }
+    }
+
+    stage('Install Wazuh Agent') {
+      steps {
         sh '''
-          echo "[INFO] Current working directory: $(pwd)"
-          echo "[INFO] Listing project files:"
-          find . -type f
+          echo "[INFO] Starting Wazuh agent install job..."
 
-          # Make sure script is executable
-          chmod +x scripts/install_agents.sh
+          # Confirm CSV file exists
+          if [ ! -f "${CSV_PATH}" ]; then
+            echo "[ERROR] CSV file not found: ${CSV_PATH}"
+            exit 1
+          fi
 
-          # Run the install script with correct CSV path and env var for password
-          scripts/install_agents.sh ./csv/linux_targets.csv "$DEFAULT_PASS"
+          # Optional: fallback key path
+          KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_rsa.pub}"
+
+          if [ ! -f "$KEY_PATH" ]; then
+            echo "[ERROR] SSH public key not found: $KEY_PATH"
+            exit 1
+          fi
+
+          chmod +x ${DEPLOY_SCRIPT}
+          ${DEPLOY_SCRIPT} --csv ${CSV_PATH} --password ${DEFAULT_PASS} --pubkey ${KEY_PATH} | tee ${LOG_PATH}
         '''
       }
     }
@@ -29,10 +44,10 @@ pipeline {
 
   post {
     failure {
-      echo '[ERROR] Wazuh agent install job failed.'
+      echo "[ERROR] Wazuh agent install job failed."
     }
     success {
-      echo '[SUCCESS] Wazuh agents installed successfully.'
+      echo "[SUCCESS] Wazuh agent install job completed successfully."
     }
   }
 }

@@ -1,43 +1,35 @@
 #!/bin/bash
 
+# install_agents.sh
+# Purpose: Install Wazuh agent and auto-enroll via environment-based agent-auth.
+# Usage: ./install_agents.sh <group_name>
+
 set -euo pipefail
 
-# Input Parameters
-MANAGER_FQDN="enroll.cyberhongo.com"
-AGENT_GROUP="lucid-linux"
-AGENT_VERSION="4.12.0-1"
-DEB_FILE="wazuh-agent_${AGENT_VERSION}_amd64.deb"
-AGENT_DEB_URL="https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/${DEB_FILE}"
+GROUP="${1:-lucid-linux}"
+WAZUH_MANAGER="enroll.cyberhongo.com"
+WAZUH_AGENT_VERSION="4.12.0-1"
+WAZUH_AGENT_DEB="wazuh-agent_${WAZUH_AGENT_VERSION}_amd64.deb"
+DOWNLOAD_URL="https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/${WAZUH_AGENT_DEB}"
 
-# Download Agent
-echo "[INFO] Downloading Wazuh agent ${AGENT_VERSION}..."
-wget -q --show-progress "${AGENT_DEB_URL}" -O "/tmp/${DEB_FILE}"
+echo "[DEBUG] install_agents.sh started with args: $GROUP"
+echo "[INFO] Installing Wazuh agent for group: $GROUP"
 
-# Install Prerequisites
-echo "[INFO] Installing dependencies..."
-sudo apt-get update -y
-sudo apt-get install -y libcap2 libcurl4 libsystemd0
+# Download agent package
+echo "[INFO] Downloading Wazuh agent ${WAZUH_AGENT_VERSION}..."
+wget -q "$DOWNLOAD_URL" -O "$WAZUH_AGENT_DEB"
 
-# Install Agent
-echo "[INFO] Installing Wazuh agent..."
-sudo WAZUH_MANAGER="${MANAGER_FQDN}" \
-     WAZUH_AGENT_GROUP="${AGENT_GROUP}" \
-     dpkg -i "/tmp/${DEB_FILE}" || {
-        echo "[ERROR] dpkg failed. Attempting to fix with apt."
-        sudo apt-get install -f -y
-        sudo dpkg -i "/tmp/${DEB_FILE}"
-     }
-
-# Enable and Start
-echo "[INFO] Enabling and starting wazuh-agent..."
-sudo systemctl daemon-reexec
-sudo systemctl enable wazuh-agent
-sudo systemctl start wazuh-agent
-
-# Status Check
-sleep 3
-echo "[INFO] Agent status:"
-sudo systemctl status wazuh-agent --no-pager
+# Install with ENV to auto-trigger agent-auth via postinst script
+echo "[INFO] Installing package with auto-enroll via dpkg..."
+sudo WAZUH_MANAGER="$WAZUH_MANAGER" WAZUH_AGENT_GROUP="$GROUP" dpkg -i "./$WAZUH_AGENT_DEB"
 
 # Cleanup
-rm -f "/tmp/${DEB_FILE}"
+rm -f "./$WAZUH_AGENT_DEB"
+
+# Enable and start agent
+echo "[INFO] Enabling and starting Wazuh agent..."
+sudo systemctl daemon-reexec || true
+sudo systemctl enable wazuh-agent
+sudo systemctl restart wazuh-agent
+
+echo "[SUCCESS] Wazuh agent installed and enrolled successfully for group: $GROUP"

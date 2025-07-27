@@ -1,44 +1,40 @@
 #!/bin/bash
 
+set -euo pipefail
+
 CSV_FILE="$1"
-SSH_USER="$2"
-SSH_KEY="$3"
+SSH_KEY="$2"
+LOG_DIR="logs"
+
+mkdir -p "$LOG_DIR"
+
+if [[ ! -f "$CSV_FILE" ]]; then
+  echo "❌ CSV file not found: $CSV_FILE"
+  exit 1
+fi
 
 echo "[*] Beginning rollout to Linux agents from $CSV_FILE..."
 
-# Skip the header line
-tail -n +2 "$CSV_FILE" | while IFS=',' read -r HOSTNAME IP USER GROUP; do
-    echo "➡ Deploying to $HOSTNAME ($IP)..."
+while IFS=, read -r ip hostname username group; do
+  [[ "$ip" == "ip" ]] && continue
 
-    ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" "$SSH_USER@$IP" bash -s <<'EOF'
-echo -e "\e[34m:: [$HOSTNAME] Starting Wazuh agent enrollment ::\e[0m"
+  echo "➡ Deploying to $hostname ($ip)..."
 
-# Stop and purge any existing agent
-echo "[*] Stopping & purging existing agent (if any)…"
-sudo systemctl stop wazuh-agent 2>/dev/null
-sudo apt-get purge -y wazuh-agent 2>/dev/null
+  scp -i "$SSH_KEY" -o StrictHostKeyChecking=no scripts/install_agents.sh "$username@$ip:/tmp/" > "$LOG_DIR/$hostname.log" 2>&1 || {
+    echo "❌ $ip ($hostname): SCP failed" | tee -a "$LOG_DIR/$hostname.log"
+    continue
+  }
 
-# Download and install the agent
-echo "[*] Downloading latest Wazuh agent 4.12.0…"
-curl -sO https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_4.12.0-1_amd64.deb
+  ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$username@$ip" \
+    "chmod +x /tmp/install_agents.sh && sudo /tmp/install_agents.sh $group" >> "$LOG_DIR/$hostname.log" 2>&1
 
-echo "[*] Installing agent…"
-sudo dpkg -i wazuh-agent_4.12.0-1_amd64.deb
+  if [[ $? -eq 0 ]]; then
+    echo "✅ $ip ($hostname): Enrollment successful"
+  else
+    echo "❌ $ip ($hostname): Enrollment failed" | tee -a "$LOG_DIR/$hostname.log"
+  fi
 
-# Configure manager address
-echo "[*] Patching ossec.conf with manager address enroll.cyberhongo.com…"
-sudo sed -i 's|<address>.*</address>|<address>enroll.cyberhongo.com</address>|' /var/ossec/etc/ossec.conf
+done < "$CSV_FILE"
 
-# Enable and start agent
-sudo systemctl daemon-reexec
-sudo systemctl enable wazuh-agent
-sudo systemctl start wazuh-agent
-EOF
-
-    if [ $? -eq 0 ]; then
-        echo "✅ $IP ($HOSTNAME): Enrollment completed"
-    else
-        echo "❌ $IP ($HOSTNAME): Enrollment failed"
-    fi
-
-done
+echo "[*] Linux rollout complete. Logs stored in $LOG_DIR/"
+exit 0
