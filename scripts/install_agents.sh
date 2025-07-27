@@ -1,50 +1,65 @@
 #!/bin/bash
-
-set -e
+set -euo pipefail
 
 # Defaults
-CSV_FILE=""
-AUTH_PASS=""
-PUBKEY_PATH=""
+CSV_FILE="csv/linux_targets.csv"
+SSH_USER="robot"
+SSH_KEY="$HOME/.ssh/id_rsa"
 
-while [[ $# -gt 0 ]]; do
+# Parse arguments
+while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --csv)
       CSV_FILE="$2"
       shift 2
       ;;
-    --authpass)
-      AUTH_PASS="$2"
+    --ssh-user)
+      SSH_USER="$2"
       shift 2
       ;;
-    --pubkey)
-      PUBKEY_PATH="$2"
+    --ssh-key)
+      SSH_KEY="$2"
       shift 2
       ;;
     *)
-      echo "[ERROR] Unknown parameter passed: $1"
+      echo "[ERROR] Unknown argument: $1" >&2
       exit 1
       ;;
   esac
 done
 
-if [[ -z "$CSV_FILE" || -z "$AUTH_PASS" || -z "$PUBKEY_PATH" ]]; then
-  echo "[ERROR] Missing required parameters."
-  echo "Usage: $0 --csv <csv_file> --authpass <password> --pubkey <pubkey_path>"
+# Validate inputs
+if [[ ! -f "$CSV_FILE" ]]; then
+  echo "[ERROR] CSV file not found: $CSV_FILE"
   exit 1
 fi
 
-echo "[INFO] Parsing targets from $CSV_FILE..."
-while IFS=, read -r ip hostname user group; do
-  [[ "$ip" == "ip" ]] && continue  # Skip header
+if [[ ! -f "$SSH_KEY" ]]; then
+  echo "[ERROR] SSH private key not found: $SSH_KEY"
+  exit 1
+fi
 
-  echo "[INFO] Installing Wazuh agent on $hostname ($ip)..."
+echo "[INFO] Using target CSV: $CSV_FILE"
+echo "[INFO] Using SSH user: $SSH_USER"
+echo "[INFO] Using SSH key: $SSH_KEY"
 
-  ssh -o StrictHostKeyChecking=no -i "$PUBKEY_PATH" "$user@$ip" <<EOF
-    curl -s https://packages.wazuh.com/4.x/install.sh | bash
-    sudo /var/ossec/bin/agent-auth --host enroll.cyberhongo.com --port 5443 --authpass "$AUTH_PASS"
-    sudo systemctl enable wazuh-agent
-    sudo systemctl restart wazuh-agent
-EOF
+# Ensure scripts exist
+DEPLOY_KEY_SCRIPT="scripts/deploy_ssh_pubkeys.sh"
+AGENT_ENROLL_SCRIPT="scripts/enroll_linux_agent.sh"
 
-done < "$CSV_FILE"
+for script in "$DEPLOY_KEY_SCRIPT" "$AGENT_ENROLL_SCRIPT"; do
+  if [[ ! -x "$script" ]]; then
+    echo "[ERROR] Required script missing or not executable: $script"
+    exit 1
+  fi
+done
+
+# Deploy SSH keys to targets
+echo "[INFO] Deploying SSH key to all targets..."
+bash "$DEPLOY_KEY_SCRIPT" --csv "$CSV_FILE" --ssh-key "$SSH_KEY" --ssh-user "$SSH_USER"
+
+# Enroll Wazuh agents
+echo "[INFO] Installing and enrolling Wazuh agents..."
+bash "$AGENT_ENROLL_SCRIPT" --csv "$CSV_FILE" --ssh-key "$SSH_KEY" --ssh-user "$SSH_USER"
+
+echo "[SUCCESS] All Linux agents processed successfully."

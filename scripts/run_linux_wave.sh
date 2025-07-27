@@ -1,20 +1,33 @@
 #!/bin/bash
 set -euo pipefail
-CSV_FILE="$1"
-KEY_PATH="$2"
-LOG_FILE="linux_wave_$(date +%Y%m%d_%H%M%S).log"
 
-echo ":: Rolling out to Linux fleet ::" | tee -a "$LOG_FILE"
+# Default locations
+CSV_FILE="csv/linux_targets.csv"
+SSH_USER="robot"
+SSH_KEY="$HOME/.ssh/id_rsa"
 
-tail -n +2 "$CSV_FILE" | while IFS=',' read -r HOSTNAME IP USER GROUP; do
-    [[ "$HOSTNAME" =~ ^#|^$ ]] && continue
-
-    USER=${USER:-robot}
-    echo -e "\n➜  $HOSTNAME ($IP) as $USER" | tee -a "$LOG_FILE"
-
-    scp -i "$KEY_PATH" -o StrictHostKeyChecking=no scripts/enroll_linux_agent.sh "${USER}@${IP}:/tmp/" | tee -a "$LOG_FILE"
-
-    ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${USER}@${IP}" \
-        "chmod +x /tmp/enroll_linux_agent.sh && sudo /tmp/enroll_linux_agent.sh $GROUP" | tee -a "$LOG_FILE"
-
+# Allow override via args
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --csv)
+      CSV_FILE="$2"
+      shift 2
+      ;;
+    --ssh-user)
+      SSH_USER="$2"
+      shift 2
+      ;;
+    --ssh-key)
+      SSH_KEY="$2"
+      shift 2
+      ;;
+    *)
+      echo "[ERROR] Unknown option: $1" >&2
+      exit 1
+      ;;
+  esac
 done
+
+# Launch main Linux install pipeline
+echo "[INFO] Running full Linux rollout..."
+bash scripts/install_agents.sh --csv "$CSV_FILE" --ssh-user "$SSH_USER" --ssh-key "$SSH_KEY"
