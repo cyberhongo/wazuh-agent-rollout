@@ -10,7 +10,6 @@ while [[ "$#" -gt 0 ]]; do
   case $1 in
     --csv) CSV_FILE="$2"; shift ;;
     --pubkey) KEY_PATH="$2"; shift ;;
-    --password) DEFAULT_PASS="$2"; shift ;; # Placeholder if needed later
     *) echo "[ERROR] Unknown parameter passed: $1"; exit 1 ;;
   esac
   shift
