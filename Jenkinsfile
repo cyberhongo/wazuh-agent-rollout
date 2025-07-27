@@ -20,22 +20,22 @@ pipeline {
       }
       steps {
         withCredentials([
-          sshUserPrivateKey(credentialsId: 'jenkins_ssh_key',
-                            keyFileVariable: 'SSH_KEY_FILE',
-                            usernameVariable: 'SSH_USER'),
-          string(credentialsId: 'wazuh_default_pass', variable: 'DEFAULT_PASS')
+          file(credentialsId: 'wazuh_ssh_key', variable: 'SSH_KEY_FILE'),
+          string(credentialsId: 'wazuh_default_pass', variable: 'WAZUH_PASS')
         ]) {
           sh '''
-            echo "[INFO] Starting Wazuh agent install job..."
+           echo "[INFO] Starting Wazuh agent install job..."
+           echo "[INFO] Generating public key from injected private key..."
+           ssh-keygen -y -f $SSH_KEY_FILE > id_rsa.pub
+           chmod 644 id_rsa.pub
 
-            echo "[INFO] Generating public key from injected private key..."
-            ssh-keygen -y -f "$SSH_KEY_FILE" > "$PUBKEY_PATH"
-            chmod 644 "$PUBKEY_PATH"
-
-            echo "[INFO] Launching rollout script with injected key..."
-            chmod +x ${DEPLOY_SCRIPT}
-            ${DEPLOY_SCRIPT} --csv ${CSV_PATH} --password "${DEFAULT_PASS}" --pubkey "$PUBKEY_PATH" | tee ${LOG_PATH}
-          '''
+           echo "[INFO] Launching rollout script with injected key..."
+           chmod +x scripts/install_agents.sh
+           scripts/install_agents.sh \
+             --csv csv/linux_targets.csv \
+             --authpass $WAZUH_PASS \
+             --pubkey $(pwd)/id_rsa.pub | tee install.log
+         '''
         }
       }
     }
