@@ -1,40 +1,56 @@
 pipeline {
-    agent { label 'linux-agent-01' }
+    agent {
+        label 'linux-agent-01'
+    }
 
     environment {
-        PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/bin:/usr/local/bin"
+        AGENT_PASS = credentials('agent-default-password')
+        SSH_KEY_PATH = "${HOME}/.ssh/id_rsa.pub"
+        SSH_USER = "robot"
     }
 
     options {
-        ansiColor('xterm')
         timestamps()
+        disableConcurrentBuilds()
     }
 
     stages {
-        stage('Checkout Code') {
+        stage('Prep') {
             steps {
-                echo '[INFO] Code already checked out via declarative SCM.'
-                sh 'ls -la'
+                echo "[INFO] Confirming target CSV and scripts are present..."
+                sh 'ls -l csv/linux_targets.csv'
+                sh 'ls -l scripts/install_agents.sh'
             }
         }
 
-        stage('Install Wazuh Agent') {
+        stage('Install Linux Agents') {
             steps {
+                echo "[INFO] Running Wazuh agent installation script..."
                 sh '''
-                    echo "[INFO] Running Wazuh agent installation script..."
                     chmod +x scripts/install_agents.sh
-                    ./scripts/install_agents.sh
+                    ./scripts/install_agents.sh \
+                        --csv csv/linux_targets.csv \
+                        --ssh-key ${SSH_KEY_PATH} \
+                        --ssh-user ${SSH_USER} \
+                        --password "${AGENT_PASS}"
                 '''
+            }
+        }
+
+        stage('Post Check') {
+            steps {
+                echo "[INFO] Listing active agents..."
+                sh 'curl -sk -u wazuh:${AGENT_PASS} https://wazuh.cyberhongo.com:55000/agents | jq .data'
             }
         }
     }
 
     post {
         failure {
-            echo '[ERROR] Pipeline failed. Check the logs above for details.'
+            echo "[ERROR] Jenkins pipeline failed."
         }
         success {
-            echo '[SUCCESS] Wazuh agent rollout completed successfully.'
+            echo "[INFO] Jenkins pipeline completed successfully."
         }
     }
 }
