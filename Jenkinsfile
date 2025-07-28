@@ -1,56 +1,55 @@
 pipeline {
-    agent {
-        label 'linux-agent-01'
-    }
+    agent any
 
     environment {
-        AGENT_PASS = credentials('agent-default-password')
-        SSH_KEY_PATH = "${HOME}/.ssh/id_rsa.pub"
-        SSH_USER = "robot"
+        SSH_KEY_PATH = '/home/jenkins/.ssh/id_rsa'
+        SSH_PUB_PATH = '/home/jenkins/.ssh/id_rsa.pub'
+        SSH_USER     = 'robot'
+        SSH_PASS     = credentials('wazuh_ssh_pass')
     }
 
     options {
+        timeout(time: 30, unit: 'MINUTES')
         timestamps()
-        disableConcurrentBuilds()
+        ansiColor('xterm')
     }
 
     stages {
-        stage('Prep') {
+        stage('Prepare') {
             steps {
-                echo "[INFO] Confirming target CSV and scripts are present..."
-                sh 'ls -l csv/linux_targets.csv'
-                sh 'ls -l scripts/install_agents.sh'
+                echo "[INFO] Validating CSV structure..."
+                sh 'bash scripts/validate_csv_format.sh csv/linux_targets.csv'
             }
         }
 
-        stage('Install Linux Agents') {
+        stage('Deploy SSH Keys') {
             steps {
-                echo "[INFO] Running Wazuh agent installation script..."
-                sh '''
-                    chmod +x scripts/install_agents.sh
-                    ./scripts/install_agents.sh \
-                        --csv csv/linux_targets.csv \
-                        --ssh-key ${SSH_KEY_PATH} \
-                        --ssh-user ${SSH_USER} \
-                        --password "${AGENT_PASS}"
-                '''
+                echo "[INFO] Distributing SSH key to targets..."
+                sh 'bash scripts/deploy_ssh_pubkeys.sh --csv csv/linux_targets.csv --ssh-key "$SSH_PUB_PATH" --ssh-user "$SSH_USER" --password "$SSH_PASS"'
             }
         }
 
-        stage('Post Check') {
+        stage('Clean Existing Agents') {
             steps {
-                echo "[INFO] Listing active agents..."
-                sh 'curl -sk -u wazuh:${AGENT_PASS} https://wazuh.cyberhongo.com:55000/agents | jq .data'
+                echo "[INFO] Cleaning up existing Wazuh agents..."
+                sh 'bash scripts/cleanup_agents.sh --csv csv/linux_targets.csv --ssh-key "$SSH_KEY_PATH" --ssh-user "$SSH_USER"'
+            }
+        }
+
+        stage('Install Wazuh Agents') {
+            steps {
+                echo "[INFO] Installing and enrolling Wazuh agents..."
+                sh 'bash scripts/install_agents.sh --csv csv/linux_targets.csv --ssh-key "$SSH_KEY_PATH" --ssh-user "$SSH_USER"'
             }
         }
     }
 
     post {
-        failure {
-            echo "[ERROR] Jenkins pipeline failed."
+        always {
+            echo "[INFO] Pipeline completed. Check logs above for results."
         }
-        success {
-            echo "[INFO] Jenkins pipeline completed successfully."
+        failure {
+            echo "[ERROR] One or more stages failed. Investigate the errors above."
         }
     }
 }
