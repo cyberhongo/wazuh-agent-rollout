@@ -12,4 +12,3 @@ ip,hostname,username,group
 172.20.10.11,prod1,robot,lucid-linux
 172.20.10.12,notebook,robot,lucid-linux
 10.100.1.81,web,robot,lucid-linux
-
