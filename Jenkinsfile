@@ -5,9 +5,6 @@ pipeline {
         SSH_USER = 'robot'
         SSH_KEY = credentials('ssh_key_robot')
         DEFAULT_PASS = credentials('ssh_default_pass')
-
-        // Force extended PATH
-    PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     }
 
     stages {
@@ -22,22 +19,7 @@ pipeline {
             }
         }
 
-        stage('Validate Dependencies') {
-            steps {
-                sh '''
-                    echo [INFO] Validating sshpass availability...
-                    if ! command -v sshpass >/dev/null 2>&1; then
-                        echo [ERROR] sshpass is missing on this Jenkins agent.
-                        echo [HINT] Please pre-install it manually on 'linux-agent-01' or bake it into the agent image.
-                        exit 127
-                    else
-                        echo [INFO] sshpass is available.
-                    fi
-                '''
-            }
-        }
-
-        stage('Install Wazuh Agents') {
+        stage('Install Wazuh Agent') {
             steps {
                 withCredentials([
                     sshUserPrivateKey(credentialsId: 'ssh_key_robot', keyFileVariable: 'SSH_KEY'),
@@ -47,6 +29,9 @@ pipeline {
                         echo [INFO] Using SSH User: $SSH_USER
                         echo [INFO] Using SSH Key at: $SSH_KEY
                         chmod 600 $SSH_KEY
+
+                        echo [INFO] Forcing PATH and deploying...
+                        export PATH=$PATH:/usr/bin
 
                         echo [INFO] Deploying and installing Wazuh agent on Linux targets...
                         ./scripts/install_agents.sh \
