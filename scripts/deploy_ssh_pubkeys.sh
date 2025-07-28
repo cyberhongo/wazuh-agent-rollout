@@ -1,28 +1,69 @@
 #!/bin/bash
-set -e
 
-CSV_FILE="$1"
-SSH_PUBKEY="$2"
-SSH_USER="$3"
-DEFAULT_PASS="$4"
+# Force PATH to ensure sshpass is visible
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-if [[ -z "$CSV_FILE" || -z "$SSH_PUBKEY" || -z "$SSH_USER" || -z "$DEFAULT_PASS" ]]; then
-  echo -e "\033[0;31m[ERROR]\033[0m Missing arguments. Usage: $0 <csv_file> <ssh_pubkey> <ssh_user> <default_pass>"
+CSV_FILE=""
+SSH_KEY=""
+SSH_USER=""
+DEFAULT_PASS=""
+
+print_help() {
+  echo "Usage: $0 --csv <csv_file> --ssh-key <key_path> --ssh-user <username> [--password <default_password>]"
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --csv)
+      CSV_FILE="$2"
+      shift 2
+      ;;
+    --ssh-key)
+      SSH_KEY="$2"
+      shift 2
+      ;;
+    --ssh-user)
+      SSH_USER="$2"
+      shift 2
+      ;;
+    --password)
+      DEFAULT_PASS="$2"
+      shift 2
+      ;;
+    *)
+      print_help
+      ;;
+  esac
+done
+
+if [[ -z "$CSV_FILE" || -z "$SSH_KEY" || -z "$SSH_USER" ]]; then
+  print_help
+fi
+
+if [[ ! -f "$CSV_FILE" ]]; then
+  echo "[ERROR] CSV file not found: $CSV_FILE"
   exit 1
 fi
 
-[[ -f "$CSV_FILE" ]] || { echo -e "\033[0;31m[ERROR]\033[0m CSV file not found: $CSV_FILE"; exit 1; }
-[[ -f "$SSH_PUBKEY" ]] || { echo -e "\033[0;31m[ERROR]\033[0m SSH public key not found: $SSH_PUBKEY"; exit 1; }
+if [[ ! -f "$SSH_KEY" ]]; then
+  echo "[ERROR] SSH key not found: $SSH_KEY"
+  exit 1
+fi
+
+chmod 600 "$SSH_KEY"
 
 while IFS=, read -r ip hostname user group; do
   [[ "$ip" =~ ^#.*$ || -z "$ip" ]] && continue
+
   echo "[INFO] Deploying SSH key to $hostname ($ip)"
 
-  sshpass -p "$DEFAULT_PASS" ssh-copy-id -i "$SSH_PUBKEY" -o StrictHostKeyChecking=no "$SSH_USER@$ip"
-  if [[ $? -eq 0 ]]; then
-    echo "[SUCCESS] SSH key deployed to $hostname ($ip)"
+  if [[ -n "$DEFAULT_PASS" ]]; then
+    echo "[DEBUG] PATH is: $PATH"
+    which sshpass || echo "[ERROR] sshpass still not found in PATH"
+    /usr/bin/sshpass -p "$DEFAULT_PASS" ssh-copy-id -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$ip"
   else
-    echo -e "\033[0;31m[FAILURE]\033[0m Could not deploy SSH key to $hostname ($ip)"
+    ssh-copy-id -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$ip"
   fi
 
-done < <(tail -n +2 "$CSV_FILE")
+done < "$CSV_FILE"
