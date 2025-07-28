@@ -5,6 +5,9 @@ pipeline {
         SSH_USER = 'robot'
         SSH_KEY = credentials('ssh_key_robot')
         DEFAULT_PASS = credentials('ssh_default_pass')
+
+        // Force extended PATH
+    PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     }
 
     stages {
