@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        SSH_KEY_PATH = '/home/jenkins/.ssh/id_rsa'
-        SSH_PUB_PATH = '/home/jenkins/.ssh/id_rsa.pub'
+        SSH_KEY_PATH = '/home/robot/.ssh/id_rsa'
+        SSH_PUB_PATH = '/home/robot/.ssh/id_rsa.pub'
         SSH_USER     = 'robot'
         SSH_PASS     = credentials('wazuh_ssh_pass')
     }
