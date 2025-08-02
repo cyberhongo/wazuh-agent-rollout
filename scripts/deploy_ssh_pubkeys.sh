@@ -51,7 +51,8 @@ fi
 
 echo "[*] Distributing SSH key using $SSH_KEY and $CSV..."
 
-tail -n +2 "$CSV" | while IFS=',' read -r ip hostname username group; do
+while IFS=',' read -r ip hostname username group; do
+  [[ "$ip" == "ip" ]] && continue
   echo "🔐 Deploying key to $username@$ip ($hostname)..."
 
   sshpass -p "$PASSWORD" ssh-copy-id -i "$SSH_KEY" -o StrictHostKeyChecking=no "$username@$ip" &>/dev/null
@@ -62,4 +63,4 @@ tail -n +2 "$CSV" | while IFS=',' read -r ip hostname username group; do
     echo "❌ Failed: $hostname"
   fi
 
-done
+done < "$CSV"

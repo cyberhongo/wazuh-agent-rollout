@@ -1,66 +1,79 @@
-#!/bin/bash
+pipeline {
+    agent {
+        label 'linux-agent-01'
+    }
 
-set -e
+    environment {
+        CSV = 'csv/linux_targets.csv'
+        SSH_KEY = '/home/jenkins/.ssh/id_rsa.pub'
+        SSH_USER = 'robot'
+    }
 
-# Default vars
-CSV="csv/linux_targets.csv"
-SSH_KEY="/home/jenkins/.ssh/id_rsa.pub"
-SSH_USER="robot"
-PASSWORD=""
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        ansiColor('xterm')
+        timestamps()
+    }
 
-# Parse arguments
-while [[ "$#" -gt 0 ]]; do
-  case $1 in
-    --csv)
-      CSV="$2"
-      shift 2
-      ;;
-    --ssh-key)
-      SSH_KEY="$2"
-      shift 2
-      ;;
-    --ssh-user)
-      SSH_USER="$2"
-      shift 2
-      ;;
-    --password)
-      PASSWORD="$2"
-      shift 2
-      ;;
-    *)
-      echo "[ERROR] Unknown argument: $1"
-      exit 1
-      ;;
-  esac
-done
+    stages {
+        stage('Validate CSV') {
+            steps {
+                echo "[INFO] Validating CSV structure..."
+                sh 'bash scripts/validate_csv_format.sh ${CSV}'
+            }
+        }
 
-if [[ ! -f "$SSH_KEY" ]]; then
-  echo "[ERROR] Public key not found at $SSH_KEY"
-  exit 1
-fi
+        stage('Deploy SSH Keys') {
+            environment {
+                SSH_PASS = credentials('jenkins_ssh_password')
+            }
+            steps {
+                echo "[INFO] Distributing SSH key to targets..."
+                sh '''
+                    bash scripts/deploy_ssh_pubkeys.sh \
+                        --csv ${CSV} \
+                        --ssh-key ${SSH_KEY} \
+                        --ssh-user ${SSH_USER} \
+                        --password ${SSH_PASS}
+                '''
+            }
+        }
 
-if [[ ! -f "$CSV" ]]; then
-  echo "[ERROR] CSV not found: $CSV"
-  exit 1
-fi
+        stage('Clean Existing Agents') {
+            steps {
+                echo "[INFO] Cleaning up existing Wazuh agents..."
+                sh '''
+                    bash scripts/cleanup_agents.sh \
+                        --csv ${CSV} \
+                        --ssh-key /home/jenkins/.ssh/id_rsa \
+                        --ssh-user ${SSH_USER}
+                '''
+            }
+        }
 
-if [[ -z "$PASSWORD" ]]; then
-  echo "[ERROR] SSH password not provided. Use --password option."
-  exit 1
-fi
+        stage('Install Wazuh Agents') {
+            environment {
+                DEFAULT_PASS = credentials('jenkins_ssh_password')
+            }
+            steps {
+                echo "[INFO] Installing and enrolling Wazuh agents..."
+                sh '''
+                    bash scripts/install_agents.sh \
+                        --csv ${CSV} \
+                        --ssh-key /home/jenkins/.ssh/id_rsa \
+                        --ssh-user ${SSH_USER} \
+                        --password ${DEFAULT_PASS}
+                '''
+            }
+        }
+    }
 
-echo "[*] Distributing SSH key using $SSH_KEY and $CSV..."
-
-while IFS=',' read -r ip hostname username group; do
-  [[ "$ip" == "ip" ]] && continue
-  echo "🔐 Deploying key to $username@$ip ($hostname)..."
-
-  sshpass -p "$PASSWORD" ssh-copy-id -i "$SSH_KEY" -o StrictHostKeyChecking=no "$username@$ip" &>/dev/null
-
-  if [[ $? -eq 0 ]]; then
-    echo "✅ Success: $hostname"
-  else
-    echo "❌ Failed: $hostname"
-  fi
-
-done < "$CSV"
+    post {
+        success {
+            echo "[✅] Wazuh agent rollout completed successfully."
+        }
+        failure {
+            echo "[ERROR] One or more stages failed. Investigate the logs above."
+        }
+    }
+}
